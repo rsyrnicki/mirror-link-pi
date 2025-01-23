@@ -10,6 +10,11 @@ options brcmfmac feature_disable=0x2000
 
 ## Increase SWAP
 
+## Configure usb gadget mode using libcomposite
+
+## Configure DHCP Server on usb0 interface
+https://www.elektronik-kompendium.de/sites/raspberry-pi/2202031.htm
+
 ## Activate VNC
 
 ## Allow UPnP Communication
