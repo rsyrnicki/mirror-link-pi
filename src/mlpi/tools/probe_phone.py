@@ -28,6 +28,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 from html import unescape
 from pathlib import Path
@@ -59,7 +60,7 @@ class ProbeError(RuntimeError):
 
 # ---------- USB + network bring-up ----------
 
-def wait_for_interface(before: set[str], timeout: float = 20.0) -> str:
+def wait_for_interface(before: set[str], timeout: float = 30.0) -> str:
     """Return the name of the network interface that appears after the USB command."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -70,7 +71,8 @@ def wait_for_interface(before: set[str], timeout: float = 20.0) -> str:
             return name
         time.sleep(0.5)
     raise ProbeError("no new network interface appeared after the MirrorLink USB command "
-                     "— did the phone switch to MirrorLink mode? (enable it in phone settings)")
+                     "— did the phone switch to MirrorLink mode? (enable it in phone "
+                     "settings, accept any prompt on the phone, then run again)")
 
 
 def _release_interface(interface: str) -> None:
@@ -82,6 +84,165 @@ def _release_interface(interface: str) -> None:
         except (OSError, subprocess.SubprocessError):
             pass
     subprocess.run(["ip", "addr", "flush", "dev", interface], capture_output=True)
+
+
+def _bring_up(interface: str, timeout: float = 5.0) -> None:
+    """Set the link up and wait for it: unmanaging it in NetworkManager can leave it down."""
+    subprocess.run(["ip", "link", "set", interface, "up"], capture_output=True)
+    state = Path("/sys/class/net") / interface / "operstate"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if state.read_text().strip() in ("up", "unknown"):
+                return
+        except OSError:
+            pass
+        time.sleep(0.2)
+
+
+class LinkWatcher:
+    """Record every frame on the phone's interface into phone.pcap, and remember what
+    the phone sent on its own — so a run that fails still says why (does the phone have
+    an IPv4 address? is it asking *us* for one? is it IPv6 only?)."""
+
+    PACKET_OUTGOING = 4
+
+    def __init__(self, interface: str, pcap_path: Path) -> None:
+        self.interface = interface
+        self.pcap_path = pcap_path
+        self.phone_ipv4: set[str] = set()
+        self.phone_macs: set[str] = set()
+        self.phone_dhcp_discover = False
+        self.ethertypes: dict[int, int] = {}
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=3)
+
+    def _run(self) -> None:
+        from ..capture import ETH_P_ALL, PcapWriter
+        writer = PcapWriter(self.pcap_path)
+        sock = None
+        try:
+            while not self._stop.is_set():
+                if sock is None:
+                    try:
+                        sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW,
+                                             socket.htons(ETH_P_ALL))
+                        sock.bind((self.interface, 0))
+                        sock.settimeout(0.5)
+                    except OSError:
+                        if sock:
+                            sock.close()
+                        sock = None
+                        self._stop.wait(0.5)
+                        continue
+                try:
+                    frame, addr = sock.recvfrom(262144)
+                except TimeoutError:
+                    continue
+                except OSError:
+                    sock.close()
+                    sock = None
+                    continue
+                writer.write(frame)
+                if addr[2] != self.PACKET_OUTGOING:
+                    self.observe(frame)
+        finally:
+            if sock:
+                sock.close()
+            writer.close()
+
+    def observe(self, frame: bytes) -> None:
+        """Learn from one frame the phone sent (Ethernet II)."""
+        if len(frame) < 14:
+            return
+        (etype,) = struct.unpack_from("!H", frame, 12)
+        self.ethertypes[etype] = self.ethertypes.get(etype, 0) + 1
+        self.phone_macs.add(frame[6:12].hex(":"))
+        if etype == 0x0806 and len(frame) >= 42:            # ARP: sender protocol address
+            self._add_ip(frame[28:32])
+        elif etype == 0x0800 and len(frame) >= 34:          # IPv4
+            ihl = (frame[14] & 0x0F) * 4
+            self._add_ip(frame[26:30])
+            if frame[23] == 17 and len(frame) >= 14 + ihl + 4:
+                sport, dport = struct.unpack_from("!HH", frame, 14 + ihl)
+                if (sport, dport) == (68, 67):
+                    self.phone_dhcp_discover = True
+
+    def _add_ip(self, raw: bytes) -> None:
+        ip = socket.inet_ntoa(raw)
+        if ip != "0.0.0.0" and not ip.startswith(("169.254.", "255.")):
+            self.phone_ipv4.add(ip)
+
+    def summary(self) -> str:
+        names = {0x0800: "IPv4", 0x0806: "ARP", 0x86DD: "IPv6"}
+        kinds = ", ".join(f"{names.get(t, hex(t))}×{n}" for t, n in sorted(self.ethertypes.items()))
+        return (f"phone sent: {kinds or 'nothing'}; IPv4 addresses: "
+                f"{sorted(self.phone_ipv4) or 'none'}; DHCP requests: "
+                f"{'yes' if self.phone_dhcp_discover else 'no'}")
+
+
+def neighbour_address(phone_ip: str) -> str:
+    """An address for us in the phone's /24 that isn't the phone's."""
+    a, b, c, d = phone_ip.split(".")
+    return f"{a}.{b}.{c}.{201 if d == '200' else 200}"
+
+
+# When the phone turns out to be a DHCP *client*, we serve it from this subnet
+# (MirrorLink Part 1 §5.4.1: 192.168.x.y with x = 2…127).
+_SERVE_IP, _SERVE_CLIENT = "192.168.8.1", "192.168.8.44"
+
+
+def get_addresses(iface: str, mac: bytes, watcher: LinkWatcher,
+                  session: Session) -> tuple[str, str]:
+    """Return (our address, phone address) on ``iface``.
+
+    Spec way first (the phone is the DHCP server). If it never offers, fall back on
+    what the phone sends by itself: an IPv4 address we can join, or DHCP requests we
+    can answer."""
+    try:
+        lease = dhcp.dhcp_client(iface, mac, timeout=30.0,
+                                 on_event=lambda kind, **f: session.event(kind, **f))
+        print(f"  got {lease['address']} from phone at {lease['server']}")
+        return lease["address"], lease["server"]
+    except TimeoutError as exc:
+        print(f"  {exc}; looking at what the phone sends instead")
+    print(f"  {watcher.summary()}")
+    session.event("dhcp_fallback", summary=watcher.summary(),
+                  phone_ipv4=sorted(watcher.phone_ipv4), phone_macs=sorted(watcher.phone_macs),
+                  phone_dhcp_discover=watcher.phone_dhcp_discover)
+
+    if watcher.phone_ipv4:
+        phone = sorted(watcher.phone_ipv4)[0]
+        ours = neighbour_address(phone)
+        subprocess.run(["ip", "addr", "replace", f"{ours}/24", "dev", iface], check=False)
+        print(f"  phone uses {phone}: joining its subnet as {ours}")
+        return ours, phone
+
+    if watcher.phone_dhcp_discover:
+        print(f"  the phone asks US for an address: serving {_SERVE_CLIENT}")
+        subprocess.run(["ip", "addr", "replace", f"{_SERVE_IP}/24", "dev", iface], check=False)
+        server = dhcp.DhcpServer(interface=iface, server_ip=_SERVE_IP, prefix=24,
+                                 client_ip=_SERVE_CLIENT, offer_router=False,
+                                 offer_dns=False, session=session)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            leased = list(server._leases.values())
+            if leased and leased[0] in watcher.phone_ipv4:
+                print(f"  phone took {leased[0]}")
+                return _SERVE_IP, leased[0]
+            time.sleep(0.5)
+        raise ProbeError(f"phone asked for an address but never used ours ({watcher.summary()})")
+
+    raise ProbeError(f"no DHCP offer and no IPv4 traffic from the phone ({watcher.summary()}). "
+                     "phone.pcap in the recording has everything it did send.")
 
 
 def interface_mac(interface: str) -> bytes:
@@ -406,11 +567,17 @@ def run(cfg: Config, *, device_spec: str = "", vendor: int | None = None,
     session = Session(directory, boot_number=0)
     print(f"recording into {directory}")
 
+    watcher: LinkWatcher | None = None
     try:
-        if interface:
+        if interface and (Path("/sys/class/net") / interface).exists():
             iface = interface
             print(f"using existing interface {iface} (skipping USB command)")
         else:
+            if interface:
+                # The phone leaves MirrorLink mode when the previous run ends, taking
+                # its interface with it: wake it up again.
+                print(f"{interface} is gone (phone left MirrorLink mode); "
+                      "sending the USB command again")
             device = _resolve_device(device_spec, vendor)
             print(f"phone: {device.describe()}")
             before = {p.name for p in Path("/sys/class/net").glob("*")}
@@ -420,13 +587,14 @@ def run(cfg: Config, *, device_spec: str = "", vendor: int | None = None,
             iface = wait_for_interface(before)
             print(f"  phone network interface: {iface}")
 
+        watcher = LinkWatcher(iface, directory / "phone.pcap")
+        watcher.start()
         _release_interface(iface)
+        _bring_up(iface)
         mac = interface_mac(iface)
-        lease = dhcp.dhcp_client(iface, mac,
-                                 on_event=lambda kind, **f: session.event(kind, **f))
-        print(f"  got {lease['address']} from phone at {lease['server']}")
+        ours, phone_ip = get_addresses(iface, mac, watcher, session)
 
-        location = _discover(iface, lease["server"], session)
+        location = _discover(iface, phone_ip, session, our_ip=ours)
         host, port, desc = _fetch_descriptor(location, directory, session)
         print(f"  phone descriptor: {len(desc)} bytes → {directory}/device-description.xml")
         _report_versions(desc)
@@ -437,9 +605,15 @@ def run(cfg: Config, *, device_spec: str = "", vendor: int | None = None,
     except (ProbeError, OSError, TimeoutError) as exc:
         session.event("probe_error", error=str(exc))
         print(f"FAILED: {exc}", file=sys.stderr)
+        if watcher:
+            watcher.stop()
+            session.event("link_summary", summary=watcher.summary())
         session.close()
         _write_report(directory)
         return 1
+    if watcher:
+        watcher.stop()
+        session.event("link_summary", summary=watcher.summary())
     session.close()
     _write_report(directory)
     print(f"\ndone. Summary: {directory}/report.txt")
@@ -462,31 +636,50 @@ def _resolve_device(device_spec: str, vendor: int | None) -> usbhost.UsbDevice:
     return device
 
 
-def _discover(iface: str, server: str, session: Session) -> str:
-    """M-SEARCH for the MirrorLink server; return its device-description LOCATION."""
+def _discover(iface: str, server: str, session: Session, our_ip: str = "") -> str:
+    """M-SEARCH for the MirrorLink server; return its device-description LOCATION.
+
+    Also listens for the phone's own NOTIFY announcements, in case it ignores M-SEARCH."""
+    import select
     cfg = Config()
     msg = ssdp.render_msearch(cfg, search_target="urn:schemas-upnp-org:device:TmServerDevice:1")
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, dhcp.SO_BINDTODEVICE, iface.encode())
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
-    sock.settimeout(3.0)
-    deadline = time.monotonic() + 15
+    socks = [sock]
+    try:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.setsockopt(socket.SOL_SOCKET, dhcp.SO_BINDTODEVICE, iface.encode())
+        listener.bind(("", 1900))
+        listener.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+                            socket.inet_aton("239.255.255.250")
+                            + socket.inet_aton(our_ip or "0.0.0.0"))
+        socks.append(listener)
+    except OSError as exc:   # port 1900 taken (e.g. minissdpd): M-SEARCH alone
+        session.event("ssdp_listen_failed", error=str(exc))
+    deadline = time.monotonic() + 20
     try:
         while time.monotonic() < deadline:
-            sock.sendto(msg, ("239.255.255.250", 1900))
-            sock.sendto(msg, (server, 1900))
-            try:
-                while True:
-                    data, addr = sock.recvfrom(65535)
+            for dest in (("239.255.255.250", 1900), (server, 1900)):
+                try:
+                    sock.sendto(msg, dest)
+                except OSError as exc:
+                    session.event("ssdp_send_failed", dest=dest[0], error=str(exc))
+            end = time.monotonic() + 3
+            while time.monotonic() < end:
+                ready, _, _ = select.select(socks, [], [], max(0.0, end - time.monotonic()))
+                for s in ready:
+                    data, addr = s.recvfrom(65535)
                     text = data.decode("utf-8", "replace")
+                    session.event("ssdp_rx", src=addr[0], text=text[:1000])
                     location = _header(text, "LOCATION")
-                    if location:
+                    if location and ("TmServerDevice" in text or addr[0] == server):
                         session.event("ssdp_response", src=addr[0], location=location)
                         return location
-            except TimeoutError:
-                continue
     finally:
-        sock.close()
+        for s in socks:
+            s.close()
     raise ProbeError("no SSDP response from the phone (no LOCATION header seen)")
 
 

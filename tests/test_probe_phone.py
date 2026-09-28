@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import socket
 import struct
 
 from mlpi import dhcp
@@ -70,3 +71,29 @@ def test_dhcp_client_packet_is_accepted_by_our_server():
     parsed = dhcp.parse_packet(ack)
     assert parsed.yiaddr == "192.168.7.44"
     assert struct.unpack("!I", parsed.options[dhcp.OPT_LEASE])[0] > 0
+
+
+def _eth(etype: int, payload: bytes, src: bytes = b"\x02\x57\x32\x3b\x68\x33") -> bytes:
+    return b"\xff" * 6 + src + struct.pack("!H", etype) + payload
+
+
+def test_link_watcher_learns_phone_address_from_arp_and_ipv4(tmp_path):
+    w = pp.LinkWatcher("x", tmp_path / "p.pcap")
+    arp = bytes(14) + socket.inet_aton("192.168.42.129") + bytes(10)
+    w.observe(_eth(0x0806, arp))
+    assert w.phone_ipv4 == {"192.168.42.129"}
+    w.observe(_eth(0x86DD, bytes(40)))
+    assert "IPv6×1" in w.summary() and "ARP×1" in w.summary()
+
+
+def test_link_watcher_spots_phone_acting_as_dhcp_client(tmp_path):
+    w = pp.LinkWatcher("x", tmp_path / "p.pcap")
+    ip = bytes([0x45]) + bytes(8) + bytes([17]) + bytes(2) + bytes(4) + b"\xff" * 4
+    udp = struct.pack("!HHHH", 68, 67, 8, 0)
+    w.observe(_eth(0x0800, ip + udp))
+    assert w.phone_dhcp_discover and not w.phone_ipv4   # 0.0.0.0 is not an address
+
+
+def test_neighbour_address():
+    assert pp.neighbour_address("192.168.42.129") == "192.168.42.200"
+    assert pp.neighbour_address("10.0.0.200") == "10.0.0.201"

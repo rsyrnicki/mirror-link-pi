@@ -67,6 +67,11 @@ Recorded under `<session-root>/probe-phone/<timestamp>/`:
 - **No new network interface** after the USB command → the phone did not switch to
   MirrorLink mode. Enable MirrorLink in its settings and try again; some phones only
   offer it once a client has issued the command, so a second run can succeed.
+- **No DHCP offer** → the tool records everything on the phone's interface into
+  `phone.pcap` and falls back on what the phone sends by itself: if it already has an
+  IPv4 address, we join its subnet; if it asks *us* for an address, we serve one. The
+  line `phone sent: …` says which. The phone leaves MirrorLink mode when a run ends, so
+  just run the tool again (`--interface` re-sends the USB command if the interface is gone).
 - **No SSDP response** → the phone came up on the network but isn't advertising UPnP;
   check `ip addr` shows the new interface with an address in `192.168.x.y`.
 - **VNC needs auth** → the phone offered a security type other than None; the raw
