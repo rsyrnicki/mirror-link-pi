@@ -154,11 +154,15 @@ EOF
 
 # ---------- boot partition ----------
 
-if grep -qE '^\s*dtoverlay=dwc2' "$BOOT/config.txt"; then
-    grep -qE '^\s*dtoverlay=dwc2,dr_mode=peripheral' "$BOOT/config.txt" || \
-        echo "WARNING: config.txt has a dwc2 overlay without dr_mode=peripheral; leaving it" >&2
+# Enable USB device (gadget) mode. We look ONLY for our exact peripheral overlay:
+# stock Pi OS ships model-specific dwc2 lines (e.g. "[cm5] dtoverlay=dwc2,dr_mode=host")
+# that a Pi Zero 2 W ignores, so a loose "any dwc2?" check is wrong. We always append
+# our line under a fresh [all] section, which every model reads, so it applies
+# regardless of the model-specific sections above it.
+if grep -qE '^[[:space:]]*dtoverlay=dwc2,dr_mode=peripheral' "$BOOT/config.txt"; then
+    say "USB device mode (dwc2 peripheral) already set in config.txt"
 else
-    say "enabling USB device mode (dwc2) in config.txt"
+    say "enabling USB device mode (dwc2 peripheral) in config.txt"
     printf '\n# MirrorLink-Pi: USB device (gadget) mode on the Pi Zero USB port\n[all]\ndtoverlay=dwc2,dr_mode=peripheral\n' \
         >> "$BOOT/config.txt"
 fi

@@ -99,5 +99,9 @@ Or over SSH at home: `scp -r <user>@<pi>:/var/lib/mlpi/sessions .`
 systemctl status mlpi.target 'mlpi*'
 cat /var/lib/mlpi/sessions/current/summary.txt
 journalctl -b -u mlpi-gadget -u mlpi
-ls /sys/class/udc                 # empty → dwc2 overlay missing or wrong USB port
+ls /sys/class/udc                 # empty → no gadget controller (see below)
+# If empty: /boot/firmware/config.txt needs, under a plain [all] section,
+#   dtoverlay=dwc2,dr_mode=peripheral
+# A dwc2 line under [cm4]/[cm5]/[pi5] does NOT count on a Pi Zero 2 W.
+# prepare-sd.sh adds it; if you edited config.txt by hand, check the section.
 ```
