@@ -1,0 +1,10 @@
+### HELLO (32 bytes) ###
+<Status>
+  <Init/>
+</Status>
+### PROBE SENT (56 bytes) ###
+<?xml version="1.0"?>
+<Service><GetServices/></Service>
+### RESPONSE (57 bytes) ###
+<Rsp status="syntaxError" msg="unknown outer element"/>
+### END ###

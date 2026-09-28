@@ -1,0 +1,9 @@
+### HELLO (32 bytes) ###
+<Status>
+  <Init/>
+</Status>
+### PROBE SENT (7 bytes) ###
+<Cmd/>
+### RESPONSE (57 bytes) ###
+<Rsp status="syntaxError" msg="unknown outer element"/>
+### END ###

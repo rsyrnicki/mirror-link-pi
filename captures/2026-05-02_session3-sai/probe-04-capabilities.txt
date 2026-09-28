@@ -1,0 +1,13 @@
+### HELLO (32 bytes) ###
+<Status>
+  <Init/>
+</Status>
+### PROBE SENT (34 bytes) ###
+<Req id="4"><Capabilities/></Req>
+### RESPONSE (384 bytes) ###
+<Rsp id="4">
+  <ServerData desc="Dies ist der VW Standard Application Interface Server. API Level 2" service="VW SAI-Server" version="2.0" id="nDV4RjSTA0NVyYHW5CRpLVBs3HD82nyp">
+    <Implements protocol="1.3" subscriptionLimit="1000" interfaceCmd="supported" authCmd="supported" setCmd="notSupported" heartbeatCmd="supported" timeStampingDat="supported"/>
+  </ServerData>
+</Rsp>
+### END ###

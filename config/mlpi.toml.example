@@ -1,0 +1,39 @@
+# MirrorLink-Pi configuration.
+# Loader order: built-in defaults → /etc/mlpi/mlpi.toml → ./config/mlpi.toml → MLPI_* env vars → CLI flags.
+
+[network]
+# Interface to bind to. On the Pi: "usb0". On the laptop: name of the USB-Eth adapter
+# (find via `nmcli -t -f DEVICE,TYPE device | grep ethernet`).
+interface = "usb0"          # env: MLPI_INTERFACE
+
+# IP address to advertise. Empty = autodetect from `ip -j addr show dev <interface>`.
+address   = ""              # env: MLPI_ADDRESS
+
+# HTTP port for the device descriptor + SCPDs.
+# Port 80 needs root or CAP_NET_BIND_SERVICE; 8080 is safer. The head unit reads
+# the port from the SSDP LOCATION header so this is freely chosen.
+http_port = 8080            # env: MLPI_HTTP_PORT
+
+[ssdp]
+multicast_group = "239.255.255.250"
+multicast_port  = 1900
+multicast_ttl   = 2
+# ETSI TS 103 388 expects max-age >= 1800 and notify_interval <= max-age/3.
+notify_interval_seconds = 300
+max_age_seconds         = 1800
+# Stable UUID — matches Robert's original code so head units that cached us still recognize us.
+device_uuid = "c8cba096-5abe-47ac-9c14-3267d7c94ce6"
+
+[device]
+friendly_name = "MirrorLink Pi"
+manufacturer  = "Sirnicki & Maksymilian"
+model_name    = "mlpi"
+model_number  = "0.1"
+# Per ETSI TS 103 388-2; do not override unless you know what you're doing.
+device_type   = "urn:schemas-upnp-org:device:TmServerDevice:1"
+
+[logging]
+# If empty, resolved at runtime: /var/log/mlpi/mlpi.log if writable,
+# else $XDG_STATE_HOME/mlpi/mlpi.log.
+file  = ""                  # env: MLPI_LOG_FILE
+level = "DEBUG"             # env: MLPI_LOG_LEVEL

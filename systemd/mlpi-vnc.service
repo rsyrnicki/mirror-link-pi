@@ -1,0 +1,20 @@
+[Unit]
+Description=MirrorLink-Pi VNC (x11vnc on Xvfb :99)
+# Bind to 192.168.7.2 only so the laptop/Wi-Fi side cannot reach the screen.
+After=mlpi-xvfb.service mlpi-gadget.service
+Requires=mlpi-xvfb.service
+PartOf=mlpi.target
+
+[Service]
+Type=simple
+User=mlpi
+Environment=DISPLAY=:99
+# -nopw + a private listen address is the only auth we need on a USB-only link.
+# -repeat keeps key autorepeat working; -noxdamage avoids a Xvfb-related artifact.
+ExecStart=/usr/bin/x11vnc -display :99 -forever -shared -rfbport 5900 -nopw \
+    -listen 192.168.7.2 -noxdamage -threads -repeat -quiet
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=mlpi.target

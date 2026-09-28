@@ -1,0 +1,9 @@
+### HELLO (32 bytes) ###
+<Status>
+  <Init/>
+</Status>
+### PROBE SENT (26 bytes) ###
+<Req><GetServices/></Req>
+### RESPONSE (51 bytes) ###
+<Rsp status="syntaxError" msg="unknown command"/>
+### END ###

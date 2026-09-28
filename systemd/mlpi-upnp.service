@@ -1,0 +1,21 @@
+[Unit]
+Description=MirrorLink-Pi UPnP (SSDP + HTTP descriptor)
+After=dnsmasq-usb0.service
+Wants=dnsmasq-usb0.service
+BindsTo=sys-subsystem-net-devices-usb0.device
+
+[Service]
+Type=simple
+Environment=MLPI_INTERFACE=usb0
+ExecStart=/opt/mlpi/.venv/bin/python -m mlpi run --config /etc/mlpi/mlpi.toml
+Restart=on-failure
+RestartSec=2
+# Hardening (best-effort — relax if a future feature breaks).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log/mlpi
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

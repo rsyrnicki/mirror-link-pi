@@ -1,0 +1,18 @@
+[Unit]
+Description=MirrorLink-Pi USB gadget (libcomposite NCM)
+DefaultDependencies=no
+After=sys-kernel-config.mount local-fs.target
+Wants=sys-kernel-config.mount
+Before=network-pre.target
+Conflicts=shutdown.target
+RequiresMountsFor=/sys/kernel/config
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/mlpi/scripts/pi-setup-gadget.sh
+# Tear-down: unbind UDC so a clean shutdown deregisters us with the host.
+ExecStop=/bin/sh -c 'echo "" > /sys/kernel/config/usb_gadget/g_mlpi/UDC || true'
+
+[Install]
+WantedBy=multi-user.target

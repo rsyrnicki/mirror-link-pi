@@ -1,0 +1,9 @@
+### HELLO (32 bytes) ###
+<Status>
+  <Init/>
+</Status>
+### PROBE SENT (29 bytes) ###
+<Req id="7"><Version/></Req>
+### RESPONSE (58 bytes) ###
+<Rsp id="7" status="syntaxError" msg="unknown command"/>
+### END ###
