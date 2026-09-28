@@ -13,6 +13,9 @@
 # "fixed":  always use fixed_variant.
 mode = "rotate"
 fixed_variant = "spec-1.0"
+# Handshake cycles (descriptor → profile → app list) each variant gets before the
+# next one is tried. The MIB2 loops every ~2.7 s.
+cycles_per_variant = 2
 
 [usb]
 # Some head units only talk to whitelisted USB vendors (Samsung 0x04e8, HTC 0x0bb4,

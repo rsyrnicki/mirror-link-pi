@@ -162,6 +162,7 @@ def _variant_manager(cfg: Config, variants_file: Path, session: Session) -> Vari
             mode=cfg.experiment.mode,
             fixed_variant=cfg.experiment.fixed_variant,
             attempt_gap_seconds=cfg.experiment.attempt_gap_seconds,
+            cycles_per_variant=cfg.experiment.cycles_per_variant,
             session=session,
             state_dir=Path(cfg.session.root),
         )

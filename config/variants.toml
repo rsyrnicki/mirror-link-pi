@@ -23,7 +23,46 @@
 #   context_app_category      VNC context information: application category
 #   context_trust_level       VNC context information: trust level
 #
-# The car needs ~10 s per attempt: 6 variants ≈ 1 minute per full round.
+# Order (car session 2026-09-28): the bare spec-1.0 entry (0xF0000001 only) made the
+# MIB2 stop after GetApplicationList — it never subscribed or launched. In the May
+# sessions it DID launch with the fuller legacy entry. So variants with a launchable
+# UI app / legacy entry go first; spec-1.0 is kept as a reference.
+#
+# The MIB2 loops the handshake every ~2.7 s; each variant gets `cycles_per_variant`
+# (default 2) cycles, so 7 variants ≈ 40 s per full round.
+
+[[variant]]
+name = "spec-1.0-home"
+description = "spec-1.0 plus a VNC 'home screen' UI application the car can list and launch."
+home_app = true
+
+[[variant]]
+name = "legacy-session3"
+description = "What the car saw in session 3 (non-spec category 0x00000000, audioInfo, trust claims, cert URL), with the escaping fix. Control group."
+app_category = "0x00000000"
+app_trust_level = "0x0080"
+audio_info = true
+audio_trust_level = "0x0080"
+cert_url = true
+uri_scheme = "vnc"
+
+[[variant]]
+name = "legacy-session3-home"
+description = "legacy-session3 plus the home screen UI application."
+app_category = "0x00000000"
+app_trust_level = "0x0080"
+audio_info = true
+audio_trust_level = "0x0080"
+cert_url = true
+uri_scheme = "vnc"
+home_app = true
+
+[[variant]]
+name = "spec-1.1-dap-home"
+description = "MirrorLink 1.1 with DAP endpoint and home screen application."
+ml_version = "1.1"
+dap = true
+home_app = true
 
 [[variant]]
 name = "spec-1.0"
@@ -36,28 +75,6 @@ ml_version = "1.1"
 dap = true
 
 [[variant]]
-name = "spec-1.0-home"
-description = "spec-1.0 plus a VNC 'home screen' UI application the car can list and launch."
-home_app = true
-
-[[variant]]
 name = "spec-1.1"
 description = "MirrorLink 1.1 without a DAP endpoint (1.1/1.2 clients may skip DAP, Part 4 note)."
 ml_version = "1.1"
-
-[[variant]]
-name = "spec-1.1-dap-home"
-description = "MirrorLink 1.1 with DAP endpoint and home screen application."
-ml_version = "1.1"
-dap = true
-home_app = true
-
-[[variant]]
-name = "legacy-session3"
-description = "What the car saw in session 3 (non-spec category 0x00000000, audioInfo, trust claims, cert URL), with the escaping fix. Control group."
-app_category = "0x00000000"
-app_trust_level = "0x0080"
-audio_info = true
-audio_trust_level = "0x0080"
-cert_url = true
-uri_scheme = "vnc"

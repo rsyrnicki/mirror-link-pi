@@ -29,7 +29,8 @@ def test_simulated_car_gets_a_vnc_frame(tmp_path):
     cfg.network.vnc_port = _free_port()
     session = Session(tmp_path / "0001")
     variants = VariantManager([Variant(name="spec-1.0"), Variant(name="ml11", ml_version="1.1")],
-                              session=session, attempt_gap_seconds=4.0, state_dir=tmp_path)
+                              session=session, attempt_gap_seconds=4.0, cycles_per_variant=1,
+                              state_dir=tmp_path)
     canvas = Canvas(320, 200)
     screen = StatusScreen(canvas, session=session, variant_name=lambda: variants.current.name)
     http = DescriptorServer(cfg, "127.0.0.1", session=session, variants=variants)

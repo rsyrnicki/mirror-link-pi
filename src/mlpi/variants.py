@@ -8,9 +8,14 @@ each new attempt, and records which variant was active. The first variant that
 makes the car open a TCP connection to the VNC port is locked in for the rest of
 the boot and remembered as the "winner" for the next boot.
 
-A new attempt starts when the car fetches the root device descriptor after at least
-``attempt_gap_seconds`` of silence. Only the descriptor fetch starts an attempt, so a
-slow status poll inside one attempt can never switch variants mid-handshake.
+A new attempt starts when the car fetches the root device descriptor and either
+  * the previous attempt already got its application list (one full handshake cycle), or
+  * at least ``attempt_gap_seconds`` of silence passed.
+The first rule matters: the MIB2 (session 2026-09-28) loops descriptor → profile →
+app list every ~2.7 s without any pause, so a pure silence rule never saw a second
+attempt. Only the descriptor fetch starts an attempt, so a slow status poll inside
+one attempt can never switch variants mid-handshake. Each variant is kept for
+``cycles_per_variant`` attempts before moving on.
 
 Variants are defined in ``config/variants.toml`` so they can be edited on the SD card
 without touching code.
@@ -33,6 +38,9 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_VARIANTS_FILE = _REPO_ROOT / "config" / "variants.toml"
 
 SIMULATOR_USER_AGENT = "mlpi-simulate-car"
+
+# A VNC connect up to this long after a LaunchApplication counts for that launch.
+LAUNCH_TO_VNC_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -98,6 +106,7 @@ class VariantManager:
         mode: str = "rotate",
         fixed_variant: str = "spec-1.0",
         attempt_gap_seconds: float = 4.0,
+        cycles_per_variant: int = 2,
         session: Session | None = None,
         state_dir: Path | None = None,
         clock=time.monotonic,
@@ -107,6 +116,12 @@ class VariantManager:
         self._variants = list(variants)
         self._mode = mode
         self._gap = attempt_gap_seconds
+        self._cycles = max(1, int(cycles_per_variant))
+        self._attempts_on_variant = 0
+        # (variant index, time, simulated) of the last LaunchApplication, so a VNC
+        # connect that arrives after the car already started its next cycle still
+        # credits the variant that handed out the AppURI.
+        self._last_launch: tuple[int, float, bool] | None = None
         self._session = session
         self._clock = clock
         self._lock = threading.Lock()
@@ -151,11 +166,16 @@ class VariantManager:
         """Call for every HTTP request from the car. Returns the variant to use."""
         now = self._clock()
         with self._lock:
-            starts_attempt = is_root_descriptor and (now - self._last_request) >= self._gap
+            cycle_done = "applist" in self._attempt_progress
+            silence = (now - self._last_request) >= self._gap
+            starts_attempt = is_root_descriptor and (self.attempt == 0 or cycle_done or silence)
             self._last_request = now
             if starts_attempt:
                 if self.attempt > 0 and not self._locked:
-                    self._index = (self._index + 1) % len(self._variants)
+                    self._attempts_on_variant += 1
+                    if self._attempts_on_variant >= self._cycles:
+                        self._index = (self._index + 1) % len(self._variants)
+                        self._attempts_on_variant = 0
                 self.attempt += 1
                 self._attempt_simulated = SIMULATOR_USER_AGENT in user_agent
                 self._attempt_progress = set()
@@ -180,6 +200,8 @@ class VariantManager:
                 return
             self._attempt_progress.add(step)
             attempt, variant = self.attempt, self._variants[self._index]
+            if step == "launch":
+                self._last_launch = (self._index, self._clock(), self._attempt_simulated)
         if self._session:
             self._session.event("attempt_progress", attempt=attempt, variant=variant.name,
                                 step=step)
@@ -191,9 +213,16 @@ class VariantManager:
         viewer on the laptop during the home pre-flight check must not lock anything.
         """
         with self._lock:
-            variant = self._variants[self._index]
             simulated = self._attempt_simulated
             after_launch = "launch" in self._attempt_progress
+            recent = self._last_launch
+            if not after_launch and recent and self._clock() - recent[1] <= LAUNCH_TO_VNC_SECONDS:
+                # The car already began a new cycle (maybe on another variant) before
+                # connecting: credit the variant that answered the launch.
+                if not self._locked:
+                    self._index = recent[0]
+                simulated, after_launch = recent[2], True
+            variant = self._variants[self._index]
             newly_locked = not self._locked and not simulated and after_launch
             if newly_locked:
                 self._locked = True

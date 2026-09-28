@@ -98,8 +98,11 @@ class ExperimentConfig:
     fixed_variant: str = "spec-1.0"
     # Empty = config/variants.toml shipped in the repo.
     variants_file: str = ""
-    # Seconds of silence from the car after which the next request counts as a new attempt.
+    # A descriptor fetch starts a new attempt once the previous attempt got its app list,
+    # or after this many seconds of silence (the MIB2 loops every ~2.7 s, no pause).
     attempt_gap_seconds: float = 4.0
+    # Attempts (handshake cycles) each variant gets before rotating to the next.
+    cycles_per_variant: int = 2
 
 
 @dataclass

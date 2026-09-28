@@ -419,6 +419,7 @@ def _handle_get_client_profile(req: SoapRequest, ctx: ServerContext) -> SoapResp
 def _handle_get_application_list(req: SoapRequest, ctx: ServerContext) -> SoapResponse:
     # We ignore AppListingFilter (always return everything). Per §4.5.2.2 a "*"
     # filter or empty string both mean "all elements".
+    ctx.progress("applist")   # ends a handshake cycle: the next descriptor fetch rotates
     return SoapResponse(args=[("AppListing", render_app_listing(ctx, ctx.variant()))])
 
 
