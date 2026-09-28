@@ -1,0 +1,67 @@
+# Protocol variants, tried in this order — one per connection attempt of the car —
+# until the car opens a TCP connection to the VNC port. See src/mlpi/variants.py.
+#
+# Every key is optional; omitted keys take the "baseline" value, which reproduces
+# the last car session (2026-05-02, launch-realcert.pcap) except for the
+# ClientProfile double-escaping bug, which is fixed for all variants.
+#
+# Keys:
+#   ml_version                ""/"1.0"/"1.1" — <X_mirrorLinkVersion> in the device
+#                             descriptor ("" = omitted; spec says client assumes 1.0)
+#   app_category              <appInfo><appCategory> of the VNC app entry
+#   app_trust_level           <appInfo><trustLevel>   ("" = omitted)
+#   audio_info                include the <audioInfo> block
+#   audio_trust_level         <audioInfo><trustLevel> ("" = omitted)
+#   display_content_category  add <displayInfo><contentCategory> ("" = no displayInfo)
+#   cert_url                  include <appCertificateURL>
+#   uri_scheme                scheme of the AppURI returned by LaunchApplication
+#
+# Hypotheses below are marked with how sure we are. Keep the list short: the car
+# needs ~10 s per attempt, so 8 variants ≈ 1.5 min per full round.
+
+[[variant]]
+name = "baseline"
+description = "Session-3 app list with the ClientProfile escaping fixed. Tests whether the bug alone was blocking."
+
+[[variant]]
+name = "ml11"
+description = "Declare MirrorLink 1.1 in the descriptor. MIB II Std is a 1.1 client; it may bail on a (defaulted) 1.0 server."
+ml_version = "1.1"
+
+[[variant]]
+name = "minimal"
+description = "Bare app entry: no audioInfo, no trust levels, no certificate URL. Removes every claim we cannot back up."
+audio_info = false
+app_trust_level = ""
+audio_trust_level = ""
+cert_url = false
+
+[[variant]]
+name = "ml11-minimal"
+description = "ml11 + minimal."
+ml_version = "1.1"
+audio_info = false
+app_trust_level = ""
+audio_trust_level = ""
+cert_url = false
+
+[[variant]]
+name = "ml10"
+description = "Explicit MirrorLink 1.0 in the descriptor instead of omitting the element."
+ml_version = "1.0"
+
+[[variant]]
+name = "uri-upper"
+description = "AppURI with upper-case scheme VNC:// (some specs/examples write it that way)."
+uri_scheme = "VNC"
+
+[[variant]]
+name = "no-audio"
+description = "Like baseline but without audioInfo: the car may wait for an RTP audio server we never start."
+audio_info = false
+
+[[variant]]
+name = "system-category"
+description = "UNVERIFIED (from memory of the ML app-category table): mark the VNC entry as a system/VNC-server component, 0xF0000001."
+app_category = "0xF0000001"
+audio_info = false

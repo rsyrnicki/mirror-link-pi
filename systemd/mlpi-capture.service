@@ -1,0 +1,17 @@
+[Unit]
+Description=MirrorLink-Pi packet capture of usb0 into the session directory
+After=mlpi-session.service mlpi-gadget.service
+Wants=mlpi-session.service
+PartOf=mlpi.target
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=/opt/mlpi/src
+WorkingDirectory=/opt/mlpi
+ExecStart=/usr/bin/python3 -m mlpi capture
+Restart=always
+RestartSec=2
+Nice=5
+
+[Install]
+WantedBy=mlpi.target

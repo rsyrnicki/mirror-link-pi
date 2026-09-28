@@ -1,52 +1,35 @@
 # Testing
 
-## Unit tests
+## Unit + end-to-end tests (laptop, CI)
 
 ```bash
-pip install -e '.[dev]'
-pytest -v
+pip install pytest
+PYTHONPATH=src python3 -m pytest
 ```
 
-Coverage:
-- `tests/test_config.py` — defaults, file overrides, env overrides, type coercion
-- `tests/test_netinfo.py` — `ip -j addr` parsing (mocked subprocess)
-- `tests/test_ssdp.py` — message rendering for alive/byebye/M-SEARCH/response
-- `tests/test_http_descriptor.py` — descriptor template, XML escaping, SCPD existence
+| Test file | Covers |
+|---|---|
+| `test_config.py` | defaults, file/env overrides, type coercion |
+| `test_netinfo.py` | `ip -j addr` parsing (mocked subprocess) |
+| `test_ssdp.py` | alive/byebye/M-SEARCH rendering |
+| `test_http_descriptor.py` | descriptor template, XML escaping, SCPDs, per-variant `X_mirrorLinkVersion` |
+| `test_soap.py` | real car envelopes, **single** escaping of ClientProfile, app list per variant, launch/status |
+| `test_dhcp.py` | DISCOVER/OFFER/REQUEST/ACK/NAK, options, address pool |
+| `test_canvas.py` | font, pixel formats (RGB565, 32 bpp BE, colour map), dirty tracking |
+| `test_variants.py` | rotation per attempt, locking/persisting the winner, simulator never locks |
+| `test_session.py` | boot counter, sticky stages, summary |
+| `test_rfb.py` | RFB 3.3/3.7 clients, colour-map clients, MirrorLink extension + unknown messages recorded |
+| `test_end_to_end.py` | real HTTP + VNC servers on localhost driven by the car simulator |
 
-## End-to-end on the laptop
+## Pre-flight on real hardware (home)
 
-See [`laptop-dev.md`](laptop-dev.md) — the "Verify" section is the canonical checklist.
+[`field-test.md` → Pre-flight](field-test.md#pre-flight-at-home): Pi on the laptop's USB
+port, `mlpi simulate-car --target 192.168.7.2`, check `car-view.png`. Covers the
+things the unit tests cannot: USB gadget enumeration, DHCP over the real link,
+NetworkManager staying away from `usb0`, systemd ordering, LED.
 
-What we can verify on the laptop, with no Pi or car:
+## Only the car can tell
 
-- [ ] `python -m mlpi run` starts cleanly (no traceback)
-- [ ] `python -m mlpi simulate-car --target <addr>` gets HTTP/1.1 200 with our LOCATION
-- [ ] `curl http://<addr>:8080/` returns valid XML (`xmllint --noout` accepts it)
-- [ ] All five SCPD URLs return XML
-- [ ] `POST /ctrl/ApplicationServer` returns 501; full request body is logged to mlpi.log
-- [ ] `systemd-analyze verify systemd/*.service` passes (modulo "binary not on host" warnings)
-- [ ] `bash -n scripts/*.sh` clean
-
-## What we can't test without the Pi
-
-- USB gadget enumeration on the head unit (needs a real UDC)
-- DHCP lease handed to the head unit (needs the gadget-side `usb0`)
-- Actual VNC display of the desktop
-
-## What we can't test without the car
-
-- Whether the head unit accepts our VID/PID
-- Whether the head unit gets past TLS-PSK / CCC-cert handshake (see [`known-gaps.md`](known-gaps.md))
-- Whether the head unit accepts the descriptor's service list
-- Whether stock VNC suffices or CCC-RFB-Extensions are mandatory
-
-## In the car: what to capture
-
-Bring a laptop with `journalctl -f` running over SSH:
-
-```bash
-ssh pi@192.168.7.2 'journalctl -u mlpi-upnp.service -u dnsmasq-usb0.service -f' | tee car-session-$(date +%F).log
-```
-
-The "Unhandled POST" warnings are the gold — every one is a SOAP action the head
-unit invoked. Save these logs; they drive the next implementation iteration.
+- whether the head unit opens the VNC connection for any variant
+- which RFB/MirrorLink VNC extensions it then requires (recorded raw in `vnc-N-rx.bin`)
+- whether CCC certification (DAP, signatures) is enforced — see [`known-gaps.md`](known-gaps.md)

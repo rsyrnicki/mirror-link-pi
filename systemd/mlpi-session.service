@@ -1,0 +1,16 @@
+[Unit]
+Description=MirrorLink-Pi: create this boot's session directory
+DefaultDependencies=no
+After=local-fs.target
+Before=mlpi-gadget.service mlpi-capture.service mlpi-journal.service mlpi.service
+PartOf=mlpi.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=PYTHONPATH=/opt/mlpi/src
+WorkingDirectory=/opt/mlpi
+ExecStart=/usr/bin/python3 -m mlpi session-init
+
+[Install]
+WantedBy=mlpi.target

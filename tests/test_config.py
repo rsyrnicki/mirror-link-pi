@@ -83,3 +83,25 @@ def test_resolve_log_file_falls_back_to_xdg_state(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.setattr(config, "_writable_dir", lambda p: False)
     assert config.resolve_log_file(cfg) == tmp_path / "mlpi" / "mlpi.log"
+
+
+def test_broken_boot_config_is_skipped_not_fatal(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(config, "SYSTEM_CONFIG", tmp_path / "missing.toml")
+    monkeypatch.setattr(config, "PROJECT_CONFIG", tmp_path / "missing2.toml")
+    boot = tmp_path / "boot.toml"
+    boot.write_text("[network\nhttp_port = 9090\n")   # typo: missing ]
+    monkeypatch.setattr(config, "BOOT_CONFIG", boot)
+    cfg = config.load()
+    assert cfg.network.http_port == 8080
+    assert config.load_warnings and "boot.toml" in config.load_warnings[0]
+    assert "WARNING" in capsys.readouterr().err
+
+
+def test_broken_explicit_config_still_raises(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "SYSTEM_CONFIG", tmp_path / "missing.toml")
+    monkeypatch.setattr(config, "PROJECT_CONFIG", tmp_path / "missing2.toml")
+    f = tmp_path / "explicit.toml"
+    f.write_text("not = [valid")
+    import tomllib
+    with pytest.raises(tomllib.TOMLDecodeError):
+        config.load(path=f)

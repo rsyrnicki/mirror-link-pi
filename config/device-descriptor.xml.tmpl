@@ -36,12 +36,10 @@
         <eventSubURL>/evt/TmNotificationServer</eventSubURL>
       </service>
     </serviceList>
-    <!-- X_mirrorLinkVersion intentionally OMITTED per ETSI TS 103 544-13 §7.6:
-         "If the version information is missing, the MirrorLink Client shall
-         assume a version 1.0 MirrorLink Server" — and 1.0 does not require DAP.
-         Apps will be flagged as non-certified but the session should proceed. -->
-    <!-- X_Signature also OMITTED for now; Mandatory for 1.1+ but not enforced
-         on 1.0 fallback. If the head unit terminates the session, we know we
-         hit the cert wall and need to implement DAP. -->
+    ${extra_device_xml}
+    <!-- X_mirrorLinkVersion is set per experiment variant (config/variants.toml).
+         When omitted, ETSI TS 103 544-13 §7.6 says the client "shall assume a
+         version 1.0 MirrorLink Server", and 1.0 does not require DAP. -->
+    <!-- X_Signature OMITTED: mandatory for 1.1+ but hopefully not enforced. -->
   </device>
 </root>

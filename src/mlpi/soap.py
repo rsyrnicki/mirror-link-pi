@@ -9,18 +9,29 @@ ETSI TS 103 544-9/-10. ProfileID is always "0" per spec.
   TmApplicationServer:1#GetApplicationList -> AppListing with one VNC server entry
   TmApplicationServer:1#LaunchApplication  -> AppURI = vnc://<address>:<vnc_port>
   TmApplicationServer:1#TerminateApplication -> TerminationResult=true (idempotent)
-  TmApplicationServer:1#GetApplicationStatus -> Notrunning (we don't track it yet)
+  TmApplicationServer:1#GetApplicationStatus -> tracked Foreground/Notrunning
+  TmApplicationServer:1#GetApplicationCertificateInfo -> informational cert block
+
+String arguments carry XML documents (ClientProfile, AppListing, AppStatus). On the
+wire they are entity-escaped exactly once. We unescape them when parsing and escape
+them exactly once when rendering. Before 2026-09 the parser kept the escaped form and
+the renderer escaped it again, so the head unit got ``&amp;lt;clientProfile…`` back
+from SetClientProfile — i.e. text, not a profile.
 """
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 import threading
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from html import escape as _xml_escape
 
 from . import eventing
+from .session import STAGE_LAUNCH, Session
+from .variants import Variant
 
 log = logging.getLogger(__name__)
 
@@ -59,66 +70,60 @@ DEFAULT_CLIENT_PROFILE_XML = (
 )
 
 
-def render_app_listing(ctx: "ServerContext", *, app_name: str) -> str:
+def render_app_listing(ctx: ServerContext, variant: Variant) -> str:
     """Build an AppListing XML advertising one stand-alone VNC server.
 
     Strict-required fields per Part 9 Table 4-3 are: appID, name (in app),
     protocolID (in remotingInfo), plus iconList/icon (required for VNC apps per
-    the same table). Everything else (appInfo, displayInfo, resourceStatus,
-    trustLevel, Signature) is "Optional" according to the table; the §4.2.7
-    implementation note also permits 1.0/1.1 servers to omit the Signature.
-
-    We deliberately omit trustLevel here because asserting a trust level (e.g.
-    0x0080) without a backing CCC-signed Signature appears to make the VW MIB II
-    flash "Error: MirrorLink" when the user opens the menu (observed 2026-05-02).
-    Keep the entry to bare structural requirements until we know more.
+    the same table). Everything else (appInfo, displayInfo, audioInfo,
+    resourceStatus, trustLevel, Signature) is optional; the §4.2.7 implementation
+    note also permits 1.0/1.1 servers to omit the Signature. Which optional parts
+    we send is decided by the active experiment ``variant``.
     """
     icon_url = f"http://{ctx.address}:{ctx.http_port}/icon/mlpi.png"
     cert_url = f"http://{ctx.address}:{ctx.http_port}/cert/mlpi.cert"
-    return (
-        '<?xml version="1.0" encoding="UTF-8"?>'
-        '<appList xmlns="urn:schemas-upnp-org:tmapplicationserver:applist-1-0">'
-        '<app>'
-        f'<appID>{VNC_APP_ID}</appID>'
-        f'<name>{_xml_escape(app_name)}</name>'
-        '<iconList>'
-        '<icon>'
-        '<mimetype>image/png</mimetype>'
-        '<width>128</width>'
-        '<height>128</height>'
-        '<depth>24</depth>'
-        f'<url>{_xml_escape(icon_url)}</url>'
-        '</icon>'
-        '</iconList>'
-        '<remotingInfo>'
-        '<protocolID>VNC</protocolID>'
-        '</remotingInfo>'
-        f'<appCertificateURL>{_xml_escape(cert_url)}</appCertificateURL>'
-        '<appInfo>'
-        '<appCategory>0x00000000</appCategory>'
-        '<trustLevel>0x0080</trustLevel>'
-        '</appInfo>'
-        '<audioInfo>'
-        '<audioType>all</audioType>'
-        '<contentCategory>0x80000000</contentCategory>'
-        '<trustLevel>0x0080</trustLevel>'
-        '</audioInfo>'
-        # Dynamic resourceStatus: per Part 9, "free"=slot available, "busy"=in
-        # use. After Launch, MIB II re-fetches the AppList in its retry loop;
-        # if it sees Foreground from GetApplicationStatus AND resourceStatus=free
-        # in the AppList, the two views contradict and the head unit's state
-        # machine may stall waiting for resolution. Reflect the runtime status.
-        + (
-            '<resourceStatus>busy</resourceStatus>'
-            if ctx.app_status.get(VNC_APP_ID_INT) in ("Foreground", "Background")
-            else '<resourceStatus>free</resourceStatus>'
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<appList xmlns="urn:schemas-upnp-org:tmapplicationserver:applist-1-0">',
+        '<app>',
+        f'<appID>{VNC_APP_ID}</appID>',
+        f'<name>{_xml_escape(ctx.app_name)}</name>',
+        '<iconList><icon>',
+        '<mimetype>image/png</mimetype>',
+        '<width>128</width><height>128</height><depth>24</depth>',
+        f'<url>{_xml_escape(icon_url)}</url>',
+        '</icon></iconList>',
+        '<remotingInfo><protocolID>VNC</protocolID></remotingInfo>',
+    ]
+    if variant.cert_url:
+        parts.append(f'<appCertificateURL>{_xml_escape(cert_url)}</appCertificateURL>')
+    parts.append('<appInfo>')
+    parts.append(f'<appCategory>{_xml_escape(variant.app_category)}</appCategory>')
+    if variant.app_trust_level:
+        parts.append(f'<trustLevel>{_xml_escape(variant.app_trust_level)}</trustLevel>')
+    parts.append('</appInfo>')
+    if variant.display_content_category:
+        parts.append(
+            '<displayInfo>'
+            f'<contentCategory>{_xml_escape(variant.display_content_category)}</contentCategory>'
+            '</displayInfo>'
         )
-        + '</app>'
-        '</appList>'
-    )
+    if variant.audio_info:
+        parts.append('<audioInfo><audioType>all</audioType>'
+                     '<contentCategory>0x80000000</contentCategory>')
+        if variant.audio_trust_level:
+            parts.append(f'<trustLevel>{_xml_escape(variant.audio_trust_level)}</trustLevel>')
+        parts.append('</audioInfo>')
+    # Per Part 9, "free" = slot available, "busy" = in use. After Launch, MIB II may
+    # re-fetch the AppList; reporting "free" while GetApplicationStatus says
+    # Foreground would be contradictory, so reflect the runtime status.
+    busy = ctx.app_status.get(VNC_APP_ID_INT) in ("Foreground", "Background")
+    parts.append(f'<resourceStatus>{"busy" if busy else "free"}</resourceStatus>')
+    parts.append('</app></appList>')
+    return "".join(parts)
 
 
-def render_app_certificate(ctx: "ServerContext") -> str:
+def render_app_certificate(ctx: ServerContext) -> str:
     """Return an AppCertificateInfo block per Part 9 §5.5.5.
 
     The MirrorLink Client uses this for *information* — per the spec it shall not
@@ -147,7 +152,7 @@ def render_app_certificate(ctx: "ServerContext") -> str:
 
 @dataclass
 class SoapRequest:
-    """Parsed SOAP request: service URN + action name + extracted arg dict."""
+    """Parsed SOAP request: service URN + action name + extracted (unescaped) args."""
     service_urn: str
     action: str
     args: dict[str, str]
@@ -169,7 +174,7 @@ class SoapFault(Exception):
 
 
 class ProfileStore:
-    """In-memory store for client profiles. Thread-safe (one lock for all writes)."""
+    """In-memory store for client profiles (unescaped XML). Thread-safe."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -191,10 +196,9 @@ class AppStatusStore:
     """Tracks per-app status (Foreground/Background/Notrunning).
 
     The VW MIB II observed pattern is: it calls LaunchApplication, then immediately
-    calls GetApplicationStatus, and only proceeds to open the VNC connection if it
-    sees Foreground. So we have to flip the status to Foreground synchronously when
-    LaunchApplication returns, even though we don't actually own the VNC server's
-    lifecycle (it's a separate systemd unit running continuously).
+    calls GetApplicationStatus, and only proceeds if it sees Foreground. So we flip
+    the status to Foreground synchronously when LaunchApplication returns; the VNC
+    server itself runs continuously.
     """
 
     _DEFAULT = "Notrunning"
@@ -212,9 +216,9 @@ class AppStatusStore:
         with self._lock:
             return self._status.get(app_id, self._DEFAULT)
 
-    def all(self) -> dict[int, str]:
+    def reset(self) -> None:
         with self._lock:
-            return dict(self._status)
+            self._status.clear()
 
 
 @dataclass
@@ -226,32 +230,33 @@ class ServerContext:
     LaunchApplication). They must match the actual bind addresses, so we plumb them
     through from the HTTP server rather than hard-coding.
     """
-    profile_store: ProfileStore
-    app_status: AppStatusStore
-    subscription_store: eventing.SubscriptionStore
     address: str
     http_port: int
     vnc_port: int
     app_name: str
+    profile_store: ProfileStore = field(default_factory=ProfileStore)
+    app_status: AppStatusStore = field(default_factory=AppStatusStore)
+    subscription_store: eventing.SubscriptionStore = field(
+        default_factory=eventing.SubscriptionStore)
+    session: Session | None = None
+    # Returns the variant for the current attempt; default = baseline.
+    variant: Callable[[], Variant] = Variant
+    # Called with a step name when the attempt progresses (e.g. "launch").
+    progress: Callable[[str], None] = lambda step: None
 
 
 _TM_APP_EVT_PATH = "/evt/TmApplicationServer"
 
 
-def render_app_status_value(canonical_app_id: str, status_type: str) -> str:
-    """Build the AppStatusUpdate event value.
+def render_app_status_value(app_ids: list[str]) -> str:
+    """Build the AppStatusUpdate / AppListUpdate event value.
 
-    Per Part 9 §4.2.2: this is a UTF-8 string holding a *comma-separated list*
-    of A_ARG_TYPE_AppID values whose status has changed — NOT the full
-    AppStatus XML block. The head unit, on receiving the event, calls
-    GetApplicationStatus on the listed appIDs to fetch detail. Sending the
-    XML body inline (as we did initially) was protocol-misaligned: head unit
-    accepts the NOTIFY structurally (HTTP 200) but never acts on the value.
-
-    `status_type` is unused but kept for call-site clarity / future extension.
+    Per Part 9 §4.2.2: a UTF-8 string holding a *comma-separated list* of
+    A_ARG_TYPE_AppID values whose status has changed — NOT the full AppStatus XML
+    block. The head unit, on receiving the event, calls GetApplicationStatus on the
+    listed appIDs to fetch detail.
     """
-    del status_type
-    return canonical_app_id
+    return ",".join(app_ids)
 
 
 # ---------- parsing ----------
@@ -264,10 +269,9 @@ _SOAP_ACTION_RE = re.compile(r'^"?(?P<urn>[^"#]+)#(?P<action>[^"]+)"?$')
 def parse_soap(body: bytes, soap_action_header: str | None) -> SoapRequest:
     """Parse a SOAP envelope into action + args.
 
-    Uses regex on the raw text rather than ``xml.etree`` because we want to preserve
-    the exact text of nested arguments like ``ClientProfile`` (which contain entity-
-    encoded XML). ``xml.etree`` would decode and re-emit them with different escaping,
-    which the head unit then can't recognize when we echo them back.
+    Uses regex on the raw text rather than ``xml.etree`` so that arguments which
+    carry XML documents are captured whether the client escaped them (spec) or sent
+    them as nested raw XML. Values are entity-unescaped once.
 
     The action name and service URN are taken from the ``SOAPAction`` header (mandatory
     per UPnP/SOAP). The argument names + values are extracted from the action block in
@@ -292,9 +296,8 @@ def parse_soap(body: bytes, soap_action_header: str | None) -> SoapRequest:
     args: dict[str, str] = {}
     if block_match:
         inner = block_match.group(1)
-        # Each arg is <ArgName>value</ArgName>. Values may contain entity-encoded XML.
-        for arg_match in re.finditer(r"<(\w+)>(.*?)</\1>", inner, re.DOTALL):
-            args[arg_match.group(1)] = arg_match.group(2)
+        for arg_match in re.finditer(r"<(\w+)(?:\s[^>]*)?>(.*?)</\1>", inner, re.DOTALL):
+            args[arg_match.group(1)] = html.unescape(arg_match.group(2))
 
     return SoapRequest(service_urn=urn, action=action, args=args)
 
@@ -311,7 +314,8 @@ def render_response(req: SoapRequest, resp: SoapResponse) -> bytes:
         f'  <u:{req.action}Response xmlns:u="{req.service_urn}">',
     ]
     for name, value in resp.args:
-        # Escape value but only for `&<>` since values may legitimately contain quotes.
+        # Values are plain strings; escape them exactly once (no quote escaping needed
+        # inside element content).
         escaped = _xml_escape(value, quote=False)
         lines.append(f"   <{name}>{escaped}</{name}>")
     lines.extend([f"  </u:{req.action}Response>", " </s:Body>", "</s:Envelope>", ""])
@@ -358,11 +362,14 @@ def _handle_get_max_num_profiles(req: SoapRequest, ctx: ServerContext) -> SoapRe
 
 def _handle_set_client_profile(req: SoapRequest, ctx: ServerContext) -> SoapResponse:
     profile_id = req.args.get("ProfileID", "0")
-    # ClientProfile arrives entity-encoded inside a single <ClientProfile> tag.
-    client_profile_encoded = req.args.get("ClientProfile", "")
-    # We store as-given (still entity-encoded); when we echo back we keep it that way.
-    ctx.profile_store.set(profile_id, client_profile_encoded)
-    return SoapResponse(args=[("ResultProfile", client_profile_encoded)])
+    client_profile = req.args.get("ClientProfile", "")
+    ctx.profile_store.set(profile_id, client_profile)
+    if ctx.session:
+        ctx.session.event("client_profile", profile_id=profile_id, xml=client_profile)
+        name = re.search(r"<modelName>([^<]*)</modelName>", client_profile)
+        if name:
+            ctx.session.note("car model", name.group(1))
+    return SoapResponse(args=[("ResultProfile", client_profile)])
 
 
 def _handle_get_client_profile(req: SoapRequest, ctx: ServerContext) -> SoapResponse:
@@ -373,9 +380,8 @@ def _handle_get_client_profile(req: SoapRequest, ctx: ServerContext) -> SoapResp
 
 def _handle_get_application_list(req: SoapRequest, ctx: ServerContext) -> SoapResponse:
     # We ignore AppListingFilter (always return everything). Per §4.5.2.2 a "*"
-    # filter or empty string both mean "all elements"; honouring more granular
-    # filters is an optimization we don't need yet.
-    return SoapResponse(args=[("AppListing", render_app_listing(ctx, app_name=ctx.app_name))])
+    # filter or empty string both mean "all elements".
+    return SoapResponse(args=[("AppListing", render_app_listing(ctx, ctx.variant()))])
 
 
 def _handle_launch_application(req: SoapRequest, ctx: ServerContext) -> SoapResponse:
@@ -385,23 +391,22 @@ def _handle_launch_application(req: SoapRequest, ctx: ServerContext) -> SoapResp
         raise SoapFault(810, f"Bad AppID {raw!r}")
     if parsed != VNC_APP_ID_INT:
         raise SoapFault(811, f"Unauthorized AppID {raw!r}")
-    # Per §4.5.3.1: "If the application being launched is a UI application, then
-    # the MirrorLink Server device shall give control of the UI to the launched
-    # application before returning a response." Our VNC server runs continuously
-    # so it's already "in foreground" — flip the tracked status to match. The head
-    # unit polls GetApplicationStatus right after Launch and won't open the VNC
-    # connection unless it sees Foreground.
+    if ctx.session:
+        ctx.session.reach(STAGE_LAUNCH, app_id=raw)
+    ctx.progress("launch")
+    # Per §4.5.3.1 a launched UI app shall have the UI before the response. Our VNC
+    # server runs continuously, so it already has it — flip the tracked status.
     ctx.app_status.set(parsed, "Foreground")
-    # Spec Part 9: AppStatusUpdate event must fire AFTER the LaunchApplication
-    # response has been sent. Without this NOTIFY, MIB II hangs at "Error: App"
-    # — the polled GetApplicationStatus is not enough; the head unit only
-    # opens the AppURI once it sees the eventing channel confirm Foreground.
+    # Part 9: AppStatusUpdate fires after the LaunchApplication response has been
+    # sent (eventing delays the NOTIFY slightly for that).
     eventing.fire_event(
         ctx.subscription_store,
         _TM_APP_EVT_PATH,
-        [("AppStatusUpdate", render_app_status_value(VNC_APP_ID, "Foreground"))],
+        [("AppStatusUpdate", render_app_status_value([VNC_APP_ID]))],
+        session=ctx.session,
     )
-    app_uri = f"vnc://{ctx.address}:{ctx.vnc_port}"
+    scheme = ctx.variant().uri_scheme
+    app_uri = f"{scheme}://{ctx.address}:{ctx.vnc_port}"
     return SoapResponse(args=[("AppURI", app_uri)])
 
 
@@ -412,13 +417,14 @@ def _handle_terminate_application(req: SoapRequest, ctx: ServerContext) -> SoapR
         raise SoapFault(810, f"Bad AppID {raw!r}")
     if parsed != VNC_APP_ID_INT:
         raise SoapFault(811, f"Unauthorized AppID {raw!r}")
-    # Per §4.5.4: idempotent. We don't actually own the VNC server lifetime — the
-    # systemd unit on the Pi runs continuously — so claim termination succeeds.
+    ctx.progress("terminate")
+    # Per §4.5.4: idempotent.
     ctx.app_status.set(parsed, "Notrunning")
     eventing.fire_event(
         ctx.subscription_store,
         _TM_APP_EVT_PATH,
-        [("AppStatusUpdate", render_app_status_value(VNC_APP_ID, "Notrunning"))],
+        [("AppStatusUpdate", render_app_status_value([VNC_APP_ID]))],
+        session=ctx.session,
     )
     return SoapResponse(args=[("TerminationResult", "true")])
 
@@ -426,7 +432,6 @@ def _handle_terminate_application(req: SoapRequest, ctx: ServerContext) -> SoapR
 def _handle_get_application_status(req: SoapRequest, ctx: ServerContext) -> SoapResponse:
     raw = req.args.get("AppID", VNC_APP_ID)
     if raw == "*":
-        # Wildcard → return status for every known app, in our canonical form.
         targets = [(VNC_APP_ID_INT, VNC_APP_ID)]
     else:
         parsed = _parse_app_id(raw)
@@ -434,17 +439,16 @@ def _handle_get_application_status(req: SoapRequest, ctx: ServerContext) -> Soap
             raise SoapFault(810, f"Bad AppID {raw!r}")
         # Echo back the *exact* string the head unit sent (e.g. "0x1" not
         # "0x00000001"). Spec §4.2.5 says comparison must be by integer value
-        # but VW MIB II calls Launch with "0x00000001" then Status with "0x1"
-        # and was observed bailing out when our response used the canonical
-        # form — likely a string-equality check on its side.
+        # but VW MIB II calls Launch with "0x00000001" then Status with "0x1";
+        # it might compare strings on its side.
         targets = [(parsed, raw)]
 
     entries = []
-    for parsed_id, canonical in targets:
+    for parsed_id, shown in targets:
         status_type = ctx.app_status.get(parsed_id)
         entries.append(
             '<appStatus>'
-            f'<appID>{_xml_escape(canonical)}</appID>'
+            f'<appID>{_xml_escape(shown)}</appID>'
             '<status>'
             '<profileID>0</profileID>'
             f'<statusType>{status_type}</statusType>'

@@ -28,29 +28,39 @@ from .config import Config
 log = logging.getLogger(__name__)
 
 
-def render_alive(cfg: Config, location: str) -> bytes:
+def _usn(cfg: Config, nt: str) -> str:
+    uuid = f"uuid:{cfg.ssdp.device_uuid}"
+    return uuid if nt == uuid else f"{uuid}::{nt}"
+
+
+def render_alive(cfg: Config, location: str, nt: str = "upnp:rootdevice") -> bytes:
     """Render an SSDP NOTIFY ssdp:alive datagram for the configured device."""
     return _render_message(
         "NOTIFY * HTTP/1.1",
         host=f"{cfg.ssdp.multicast_group}:{cfg.ssdp.multicast_port}",
-        nt="upnp:rootdevice",
+        nt=nt,
         nts="ssdp:alive",
-        usn=f"uuid:{cfg.ssdp.device_uuid}::upnp:rootdevice",
+        usn=_usn(cfg, nt),
         location=location,
         cache_control=f"max-age={cfg.ssdp.max_age_seconds}",
-        server="Linux/UPnP/1.0 mlpi/0.1",
+        server="Linux/UPnP/1.0 mlpi/0.2",
     )
 
 
-def render_byebye(cfg: Config) -> bytes:
+def render_byebye(cfg: Config, nt: str = "upnp:rootdevice") -> bytes:
     """Render an SSDP NOTIFY ssdp:byebye datagram (sent on shutdown)."""
     return _render_message(
         "NOTIFY * HTTP/1.1",
         host=f"{cfg.ssdp.multicast_group}:{cfg.ssdp.multicast_port}",
-        nt="upnp:rootdevice",
+        nt=nt,
         nts="ssdp:byebye",
-        usn=f"uuid:{cfg.ssdp.device_uuid}::upnp:rootdevice",
+        usn=_usn(cfg, nt),
     )
+
+
+def advertised_targets(cfg: Config) -> list[str]:
+    """Every NT a UPnP device announces: rootdevice, its uuid, device + service types."""
+    return ["upnp:rootdevice", f"uuid:{cfg.ssdp.device_uuid}", *_RESPOND_TO_ALL_TARGETS[1:]]
 
 
 def render_msearch_response(cfg: Config, location: str, st: str = "upnp:rootdevice") -> bytes:
@@ -69,7 +79,7 @@ def render_msearch_response(cfg: Config, location: str, st: str = "upnp:rootdevi
         cache_control=f"max-age={cfg.ssdp.max_age_seconds}",
         ext="",
         location=location,
-        server="Linux/UPnP/1.0 mlpi/0.1",
+        server="Linux/UPnP/1.0 mlpi/0.2",
         st=st,
         usn=usn,
     )
@@ -129,13 +139,15 @@ class SsdpResponder:
     interface. ``serve_forever`` blocks; call ``stop`` from another thread to break out.
     """
 
-    def __init__(self, cfg: Config, address: str, location: str) -> None:
+    def __init__(self, cfg: Config, address: str, location: str, session=None) -> None:
         self.cfg = cfg
         self.address = address          # interface IPv4 to bind to
         self.location = location        # absolute URL of root device descriptor
+        self.session = session          # optional mlpi.session.Session
         self._stop = threading.Event()
         self._sock: socket.socket | None = None
         self._last_alive = 0.0
+        self._announce = threading.Event()
 
     def serve_forever(self) -> None:
         self._sock = self._open_socket()
@@ -153,18 +165,31 @@ class SsdpResponder:
     def stop(self) -> None:
         self._stop.set()
 
+    def announce(self) -> None:
+        """Ask for an immediate ssdp:alive burst (e.g. when the USB link comes up)."""
+        self._announce.set()
+
     def _tick(self) -> None:
         assert self._sock is not None
         # Wake up regularly so we can re-emit alive and check the stop flag.
-        self._sock.settimeout(1.0)
+        self._sock.settimeout(0.5)
         try:
             data, addr = self._sock.recvfrom(65507)
         except TimeoutError:
             data = b""
             addr = None
+        except OSError as exc:
+            # Transient while the USB link bounces; don't let the thread die.
+            log.debug("SSDP recv failed: %s", exc)
+            time.sleep(0.5)
+            data, addr = b"", None
         if data:
             self._handle_request(data, addr)
-        if time.monotonic() - self._last_alive >= self.cfg.ssdp.notify_interval_seconds:
+        if self._announce.is_set():
+            self._announce.clear()
+            for _ in range(3):   # UDP is lossy; UPnP recommends repeating
+                self._send_alive()
+        elif time.monotonic() - self._last_alive >= self.cfg.ssdp.notify_interval_seconds:
             self._send_alive()
 
     def _handle_request(self, data: bytes, addr) -> None:
@@ -177,6 +202,8 @@ class SsdpResponder:
             return
         st = _parse_msearch_header(text, "ST") or "upnp:rootdevice"
         log.debug("M-SEARCH from %s for ST=%s:\n%s", addr, st, text)
+        if self.session is not None:
+            self.session.event("ssdp_msearch", src=f"{addr[0]}:{addr[1]}", st=st, raw=text)
         assert self._sock is not None
         # ssdp:all → respond once per known target.
         # Specific ST → respond exactly with that ST mirrored, but only if it matches
@@ -197,20 +224,23 @@ class SsdpResponder:
 
     def _send_alive(self) -> None:
         assert self._sock is not None
-        msg = render_alive(self.cfg, self.location)
+        dest = (self.cfg.ssdp.multicast_group, self.cfg.ssdp.multicast_port)
+        self._last_alive = time.monotonic()
         try:
-            self._sock.sendto(msg, (self.cfg.ssdp.multicast_group, self.cfg.ssdp.multicast_port))
-            self._last_alive = time.monotonic()
+            for nt in advertised_targets(self.cfg):
+                self._sock.sendto(render_alive(self.cfg, self.location, nt), dest)
             log.debug("Sent ssdp:alive")
         except OSError as exc:
-            log.warning("Failed to send ssdp:alive: %s", exc)
+            # No carrier yet (car not connected) is the common case; stay quiet-ish.
+            log.debug("Failed to send ssdp:alive: %s", exc)
 
     def _send_byebye(self) -> None:
         if self._sock is None:
             return
-        msg = render_byebye(self.cfg)
+        dest = (self.cfg.ssdp.multicast_group, self.cfg.ssdp.multicast_port)
         try:
-            self._sock.sendto(msg, (self.cfg.ssdp.multicast_group, self.cfg.ssdp.multicast_port))
+            for nt in advertised_targets(self.cfg):
+                self._sock.sendto(render_byebye(self.cfg, nt), dest)
             log.debug("Sent ssdp:byebye")
         except OSError as exc:
             log.warning("Failed to send ssdp:byebye: %s", exc)

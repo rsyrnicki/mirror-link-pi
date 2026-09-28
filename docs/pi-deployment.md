@@ -1,106 +1,101 @@
-# Pi deployment
+# Preparing the SD card (on the laptop, offline for the Pi)
 
-Target: Raspberry Pi Zero 2W, Pi OS Bookworm (32-bit Lite or Full).
+Target: **Raspberry Pi Zero 2 W** with **Raspberry Pi OS Lite (64-bit)** — the current
+release (Debian 13 "Trixie", Python 3.13). Bookworm (Python 3.11) works too.
 
-## 0. Flash
+The whole installation happens on the laptop. The Pi never needs internet:
+MirrorLink-Pi uses only the Python standard library that ships with Pi OS Lite. It
+brings its own DHCP server, VNC server and packet recorder, so there is no `apt install`
+(no dnsmasq, x11vnc, Xvfb or tcpdump) and no chroot/QEMU.
 
-Use Raspberry Pi Imager. Pre-configure SSH, user, WiFi in the customise dialog so you can SSH in headless.
+Laptop requirements: Linux (tested on Fedora), `sudo`, Python ≥ 3.11 for the
+simulator and the report, and the repo checked out.
 
-## 1. Enable USB OTG (one-time)
+## 1. Flash the card — Raspberry Pi Imager
 
-The Pi Zero 2W's USB-OTG port becomes a peripheral only when the `dwc2` overlay is set:
+1. Device: *Raspberry Pi Zero 2 W*. OS: *Raspberry Pi OS (other) → Raspberry Pi OS Lite (64-bit)*.
+2. Customisation ("Edit settings"):
+   - **set a username and password** (needed only to log in for debugging at home),
+   - Wi-Fi: optional (handy for SSH at home; irrelevant in the car),
+   - enable SSH: optional,
+   - **do not** enable any "USB gadget mode" option — MirrorLink-Pi sets up its own gadget.
+3. Write. When Imager is done, take the card out and put it back in (so both partitions
+   show up again).
+
+## 2. Install MirrorLink-Pi onto the card
 
 ```bash
-sudo sh -c 'echo "dtoverlay=dwc2,dr_mode=peripheral" >> /boot/firmware/config.txt'
-sudo sh -c 'echo "dwc2" >> /etc/modules'
-sudo reboot
+lsblk                                   # find the card, e.g. /dev/sdb or /dev/mmcblk0
+sudo ./scripts/prepare-sd.sh /dev/sdX   # the whole device, not a partition
 ```
 
-After reboot, verify the UDC is exposed:
+If your desktop mounted the partitions already, the script unmounts and remounts
+them itself. Alternatively: `sudo ./scripts/prepare-sd.sh --boot /run/media/$USER/bootfs --root /run/media/$USER/rootfs`.
+
+What it writes:
+
+| Where | What |
+|---|---|
+| rootfs `/opt/mlpi/` | the code (src, config, systemd, scripts, docs) + `VERSION` |
+| rootfs `/etc/systemd/system/` | `mlpi.target` + 5 units, enabled at boot |
+| rootfs `/etc/mlpi/self-signed.ccc.crt` | CCC reference cert served on `/cert/` |
+| rootfs `/etc/NetworkManager/conf.d/99-mlpi-usb0.conf` | NetworkManager leaves `usb0` alone |
+| rootfs `/etc/systemd/journald.conf.d/mlpi.conf` | persistent journal |
+| rootfs `rpi-usb-gadget-ics.service` → masked | Pi OS's own USB-gadget helper can't grab `usb0` |
+| bootfs `config.txt` | `dtoverlay=dwc2,dr_mode=peripheral` (USB device mode) |
+| bootfs `mlpi.toml` | settings you can edit from any OS (see below) |
+
+Re-running the script updates the code on the card and keeps recorded sessions.
+
+## 3. First boot
+
+Insert the card, power the Pi. The first boot of a fresh image resizes the file system
+and reboots once; allow 1–2 minutes. From then on, every boot starts:
+
+| Unit | Does |
+|---|---|
+| `mlpi-session.service` | creates `/var/lib/mlpi/sessions/NNNN` for this boot |
+| `mlpi-gadget.service` | USB gadget (CDC-NCM) + `usb0` = 192.168.7.2/24 |
+| `mlpi-capture.service` | records every frame on `usb0` into the session pcap |
+| `mlpi-journal.service` | copies the whole boot journal into the session |
+| `mlpi.service` | DHCP, SSDP, UPnP/SOAP, VNC server, status screen, LED |
+
+**Which USB port:** the Pi Zero 2 W has two micro-USB ports. The one marked **USB**
+(closer to the middle) is the data port — the car/laptop cable goes there. It also
+powers the Pi, so the PWR port stays empty.
+
+## 4. Pre-flight check at home (5 minutes, strongly recommended)
+
+See [`field-test.md`](field-test.md#pre-flight-at-home). In short: plug the Pi into the
+laptop's USB port, wait for the LED to blink twice, run
+`PYTHONPATH=src python3 -m mlpi simulate-car --target 192.168.7.2`, and look at the
+saved `car-view.png` — that is the picture the car should get.
+
+## 5. Settings (`mlpi.toml` on the boot partition)
+
+The boot partition is FAT, so it can be edited on any computer. Useful knobs:
+
+- `[experiment] mode = "fixed"` + `fixed_variant = "ml11"` — stop rotating and always use
+  one variant (e.g. after a winner was found).
+- `[usb] vid/pid` — pretend to be another vendor if a head unit filters on it.
+- `[watchdog] idle_reconnect_seconds = 0` — never soft re-plug.
+
+Variants themselves are in `/opt/mlpi/config/variants.toml` on the rootfs (re-run
+`prepare-sd.sh` after editing the repo copy).
+
+## 6. Getting the logs back
 
 ```bash
-ls /sys/class/udc       # must list at least one entry, typically "20980000.usb"
+sudo ./scripts/collect-logs.sh /dev/sdX          # → ./car-logs/<timestamp>/REPORT.txt
 ```
 
-If empty, the overlay didn't take — recheck `/boot/firmware/config.txt`.
+Or over SSH at home: `scp -r <user>@<pi>:/var/lib/mlpi/sessions .`
 
-## 2. Optional: WiFi driver fix (Pi Zero 2W only)
-
-Some Pi Zero 2W units have a flaky brcmfmac driver that drops WiFi every ~5 minutes:
+## Troubleshooting on the Pi (at home, via SSH or keyboard)
 
 ```bash
-echo "options brcmfmac feature_disable=0x2000" | sudo tee /etc/modprobe.d/brcmfmac.conf
-sudo reboot
-```
-
-(Originally documented by Robert in `legacy/PREPAREPI.md`.)
-
-## 3. Install MirrorLink-Pi
-
-```bash
-git clone https://github.com/rsyrnicki/mirror-link-pi.git
-cd mirror-link-pi
-sudo ./scripts/pi-install.sh
-```
-
-This:
-- installs `dnsmasq`, `x11vnc`, `python3-venv`
-- copies the repo to `/opt/mlpi/`
-- creates `/opt/mlpi/.venv/` and pip-installs the package editable
-- writes `/etc/mlpi/mlpi.toml` from the example
-- installs systemd units to `/etc/systemd/system/`
-- ensures `dtoverlay=dwc2` is in `config.txt`
-
-## 4. Tune `/etc/mlpi/mlpi.toml`
-
-The defaults already point at `usb0`/`192.168.7.2`/8080. The two values you may want to override:
-
-- `[ssdp].notify_interval_seconds` — drop to 60 while debugging so head-unit re-discovery is faster
-- `[device].friendly_name` — what the car shows in its menu
-
-## 5. Start
-
-```bash
-sudo systemctl enable --now mlpi.target
-journalctl -u mlpi-upnp.service -f      # watch SOAP requests from the head unit
-journalctl -u dnsmasq-usb0.service -f   # watch DHCP leases
-```
-
-Plug the USB-OTG cable into the car. Within 5–10 s you should see (in `journalctl`):
-
-1. `dnsmasq-usb0`: `DHCPACK ... 192.168.7.10 ...`
-2. `mlpi-upnp`: `M-SEARCH from ('192.168.7.10', NNNN)`
-3. `mlpi-upnp`: `GET / HTTP/1.1 200`
-4. likely a stream of `Unhandled POST /ctrl/...` warnings — **this is the goal**, every one teaches us what the head unit expects.
-
-## 6. Override USB descriptors (when the car ignores us)
-
-If step 5 shows DHCP leases but no M-SEARCH, the head unit is silently filtering our USB descriptor. Try a known-MirrorLink-vendor VID:
-
-```bash
-sudo systemctl stop mlpi.target
-sudo MLPI_USB_VID=0x04e8 MLPI_USB_PID=0x6860 /opt/mlpi/scripts/pi-setup-gadget.sh   # Samsung S5
-sudo systemctl start mlpi-upnp.service mlpi-vnc.service dnsmasq-usb0.service
-```
-
-To make the override permanent, add the env vars to a drop-in:
-
-```bash
-sudo systemctl edit mlpi-gadget.service
-# In the editor:
-# [Service]
-# Environment=MLPI_USB_VID=0x04e8
-# Environment=MLPI_USB_PID=0x6860
-```
-
-See [`known-gaps.md`](known-gaps.md) for the legal/empirical caveats.
-
-## 7. Reset
-
-```bash
-sudo systemctl disable --now mlpi.target
-sudo rm -rf /opt/mlpi /etc/mlpi /var/log/mlpi
-sudo rm /etc/systemd/system/{mlpi-*.service,mlpi.target,dnsmasq-usb0.service}
-sudo rm /etc/dnsmasq.d/usb0.conf
-sudo systemctl daemon-reload
+systemctl status mlpi.target 'mlpi*'
+cat /var/lib/mlpi/sessions/current/summary.txt
+journalctl -b -u mlpi-gadget -u mlpi
+ls /sys/class/udc                 # empty → dwc2 overlay missing or wrong USB port
 ```

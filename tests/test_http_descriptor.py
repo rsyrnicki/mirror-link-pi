@@ -50,6 +50,16 @@ def test_render_descriptor_escapes_xml_special_chars():
     assert root.find("u:device/u:friendlyName", ns).text == "<MirrorLink>"
 
 
+def test_variant_adds_mirrorlink_version():
+    from mlpi.variants import Variant
+    xml = http_descriptor.render_descriptor(Config(), "192.168.7.2",
+                                            variant=Variant(ml_version="1.1"))
+    assert ("<X_mirrorLinkVersion><majorVersion>1</majorVersion>"
+            "<minorVersion>1</minorVersion></X_mirrorLinkVersion>") in xml
+    import xml.etree.ElementTree as ET
+    ET.fromstring(xml)
+
+
 def test_all_referenced_scpds_exist():
     """Every SCPDURL in the template must point to an existing file."""
     cfg = Config()

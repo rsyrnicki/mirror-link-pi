@@ -1,7 +1,7 @@
 [Unit]
 Description=MirrorLink-Pi (umbrella target)
-Wants=mlpi-gadget.service dnsmasq-usb0.service mlpi-upnp.service mlpi-xvfb.service mlpi-vnc.service
-After=mlpi-gadget.service dnsmasq-usb0.service mlpi-upnp.service mlpi-xvfb.service mlpi-vnc.service
+Wants=mlpi-session.service mlpi-gadget.service mlpi-capture.service mlpi-journal.service mlpi.service
+After=mlpi-session.service mlpi-gadget.service
 
 [Install]
 WantedBy=multi-user.target

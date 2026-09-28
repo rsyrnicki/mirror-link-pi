@@ -1,90 +1,69 @@
 # Known gaps
 
-Documented gaps that the current code does **not** solve. Each one needs evidence
-from a real car session before we burn time on a fix.
+What the current code does **not** solve, and what we know about it. Each entry should
+be driven by evidence from a car session before we spend time on a fix.
 
-## 1. CCC certificate expiry (probably the biggest blocker)
+## 1. The car launches our app but never connects to VNC (current blocker)
 
-**Empirical:** Daniel and Robert tried connecting old MirrorLink-certified Android
-phones (Galaxy S6/S7 era) to Robert's car. They no longer pair. The Car Connectivity
-Consortium dissolved MirrorLink around 2020-2021, original cert chains expired roughly
-2023-2024, and the head unit's trust store rejects them.
+**Evidence (2026-05-02, `launch-realcert.pcap`):** every ~10 s the MIB II runs
+DHCP → descriptor → Get/SetClientProfile → GetApplicationList → SUBSCRIBE →
+GetApplicationList → LaunchApplication → GetApplicationStatus(0x1) = Foreground →
+NOTIFY → GetApplicationStatus(0x00000001) = Foreground → silence. No TCP SYN to 5900 in
+any capture. From the second round on it fetches our icon, so it does list us.
 
-Our DIY device has no CCC cert at all. The head unit will likely refuse the TLS-PSK
-handshake at some point in the SOAP exchange.
+**Fixed since:** SetClientProfile/GetClientProfile echoed the profile *double-escaped*
+(`&amp;lt;clientProfile…`) — the car got text instead of its profile back.
 
-**Investigate later, in this order:**
-1. Capture every SOAP request the head unit makes before it gives up — the `Unhandled`
-   warnings in `mlpi.log` are the data set.
-2. Check if the head unit has a developer / engineering mode that disables cert checks
-   (some Volkswagen, Ford, and Pioneer units do).
-3. Consider a firmware downgrade to a build from before CCC enforcement (~2018).
-4. As a last resort, look into MITM-ing the head unit and injecting a self-signed cert
-   if its trust store is mutable.
+**Hypotheses, now tested automatically by variant rotation** (`config/variants.toml`):
+escaping alone; `X_mirrorLinkVersion` 1.1 / explicit 1.0; dropping claims we can't back
+(trust levels, audioInfo, cert URL); upper-case `VNC://`; a system app category.
 
-**Don't:** burn time guessing at TLS-PSK setups before we have data on what the head
-unit actually demands.
+**If no variant works**, next candidates (need spec access or more captures):
+- a real MirrorLink phone's AppList/descriptor for comparison (a capture of any
+  certified phone against any head unit would settle most of this);
+- DAP (device attestation) / `X_Signature` enforcement for 1.1;
+- RTP audio server entries, since the car's ClientProfile announces RTP payloads 98/99.
 
-## 2. CCC-RFB Extensions not implemented
+## 2. CCC certificates
 
-ETSI TS 103 310-4 defines pseudo-encodings for context info, key event injection,
-content categorization, etc. None of the open-source VNC servers (x11vnc, TigerVNC,
-wayvnc) implement these.
+The CCC dissolved around 2020–21 and certified phones' certificate chains have
+expired; old certified phones no longer pair with Robert's car. We have no CCC key.
+If the car enforces attestation, options are an engineering-mode switch on the head
+unit, older firmware, or MITM of its trust store. Don't guess before the data says so.
 
-**Today:** plain RFB via x11vnc. Stock head units may negotiate down to a mode they
-then refuse to display.
+## 3. MirrorLink VNC extensions
 
-**Future work:** fork TigerVNC and add the pseudo-encodings. Roughly a week of work.
+CCC-TS-010 adds VNC extension messages (display/event configuration, context
+information, …). Our RFB server speaks plain RFB 3.8 with Raw encoding; client
+messages of type 128 are *assumed* to be `U8 ext-type, U16 length, payload` and are
+logged, not answered. Anything else unknown is dumped raw (`vnc-N-rx.bin`) and the
+connection closed. First real VNC connection = the data to implement this properly.
 
-## 3. USB VID/PID is a guess
+## 4. USB VID/PID
 
-`scripts/pi-setup-gadget.sh` defaults to `0x1d6b:0x0104` (Linux Foundation /
-Multifunction Composite Gadget). Some MirrorLink head units silently filter against an
-internal whitelist of certified vendors:
+Default `0x1d6b:0x0104` (Linux Foundation). The MIB II accepted it in every session.
+Other head units may whitelist vendors (Samsung 0x04e8, HTC 0x0bb4, LG 0x1004,
+Sony 0x054c) — `[usb] vid/pid` in `mlpi.toml`. Impersonating another vendor is a grey
+legal area in some jurisdictions.
 
-| Vendor | VID    |
-|--------|--------|
-| Samsung | 0x04e8 |
-| HTC     | 0x0bb4 |
-| LG      | 0x1004 |
-| Sony    | 0x054c |
+## 5. Single USB function
 
-Override via `MLPI_USB_VID` / `MLPI_USB_PID` env vars (or a systemd drop-in). See
-[`pi-deployment.md` §6](pi-deployment.md). Note that impersonating another
-manufacturer's device is a grey legal area in some jurisdictions.
+One CDC-NCM function. Some head units might expect a composite device (NCM + ACM).
+No evidence for the MIB II, which enumerates and talks to us.
 
-## 4. Single USB function only
+## 6. VW SAI server (side track)
 
-We expose one CDC-NCM function. Some head units expect a composite device with
-multiple interfaces (NCM + ACM serial for control, or NCM + mass-storage). If a
-silent-rejection problem persists after VID/PID iteration, try adding a dummy ACM
-function alongside NCM.
+The car also runs "VW SAI-Server" (Standard Application Interface, API level 2) on
+TCP 25010, announced via UDP 28500 beacons. `scripts/probe-sai-v*.sh` found its XML
+envelope (`<Req id=".."><Capabilities/></Req>`); `Interface`/`Subscribe` need a `url`
+we haven't found. Not needed for MirrorLink; parked.
 
-## 5. No SSDP `byebye` on USB unplug
+## 7. No wall clock
 
-`SsdpResponder._send_byebye` runs on graceful shutdown (SIGTERM) but not when the USB
-cable is yanked. In practice the head unit times out via `max-age` (1800 s default).
-Could be improved with a netlink listener on `usb0` carrier state.
+The Pi has no RTC and no network in the car, so timestamps in the logs are only
+relative (sessions are numbered by boot). Take timestamped photos of the head unit to
+line things up.
 
-## 6. `netifaces` dropped
+## 8. Python 3.11 minimum
 
-Robert's code used `netifaces`. It's unmaintained and won't build on Python ≥3.13.
-Replaced by `subprocess` + `ip -j addr`, which needs `iproute2` (default on Pi OS
-Bookworm and Fedora).
-
-## 7. Python 3.11 minimum
-
-`tomllib` requires Python ≥3.11. Pi OS Bookworm ships 3.11.2 — fine. If we ever need
-to support Bullseye, vendor `tomli` instead.
-
-## 8. NetworkManager fights with the stand-in interface (laptop only)
-
-On Fedora, NetworkManager will auto-configure any new ethernet interface. The
-`laptop-setup-stand-in.sh` script disables NM management for the chosen iface, but
-**only for the current boot.** A reboot reverts this. For long-term dev, add a NM
-keyfile under `/etc/NetworkManager/conf.d/`.
-
-## 9. Multicast routing on multi-NIC hosts
-
-Documented in `laptop-dev.md`. The setup script adds an explicit
-`ip route replace 239.0.0.0/8 dev <iface>` to force SSDP through the right NIC.
+`tomllib` needs Python ≥ 3.11: Raspberry Pi OS Bookworm (3.11) or Trixie (3.13).

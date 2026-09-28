@@ -1,0 +1,17 @@
+[Unit]
+Description=MirrorLink-Pi server (DHCP, SSDP, UPnP/SOAP, VNC, status LED)
+After=mlpi-session.service mlpi-gadget.service
+Wants=mlpi-session.service mlpi-gadget.service
+PartOf=mlpi.target
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=/opt/mlpi/src
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/opt/mlpi
+ExecStart=/usr/bin/python3 -m mlpi run
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=mlpi.target
