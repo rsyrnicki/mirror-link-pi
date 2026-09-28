@@ -71,3 +71,23 @@ def test_answer_setup_acks_ml_command_and_stalls_others(monkeypatch):
     assert gadget._answer_setup(3, other_in) is False
     # ACK = read in the request's direction; STALL = operation in the wrong direction.
     assert calls == [("read", 0), ("write", 0), ("read", 0)]
+
+
+def test_teardown_never_raises_on_a_stuck_function(tmp_path):
+    # A leftover gadget whose ffs function dir can't be rmdir'd (non-empty) must not
+    # abort teardown — otherwise the service crash-loops. Simulate on a normal fs.
+    g = tmp_path / "g_mlpi"
+    (g / "configs/c.1/strings/0x409").mkdir(parents=True)
+    (g / "strings/0x409").mkdir(parents=True)
+    stuck = g / "functions/ffs.mlcmd"
+    stuck.mkdir(parents=True)
+    (stuck / "ep0").write_text("busy")   # makes rmdir(stuck) fail with ENOTEMPTY
+    (g / "functions/ncm.usb0").mkdir()
+    gadget.teardown(g)                    # must not raise
+    assert not (g / "functions/ncm.usb0").exists()   # the removable parts are gone
+    assert not (g / "strings/0x409").exists()
+
+
+def test_default_config_keeps_ml_command_off():
+    from mlpi.config import Config
+    assert Config().usb.ml_command is False

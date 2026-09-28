@@ -43,8 +43,10 @@ class UsbConfig:
     dev_mac: str = "02:1a:11:00:00:02"   # MAC of usb0 on the Pi
     address: str = "192.168.7.2/24"      # static IPv4 of usb0
     # Answer the MirrorLink USB command (Part 1 §4.2.2) via a FunctionFS interface
-    # instead of STALLing it. Falls back to NCM-only automatically if it fails.
-    ml_command: bool = True
+    # instead of STALLing it. OFF by default: it is the newest, most hardware-fragile
+    # path (composite gadget + FunctionFS). The plain NCM gadget is proven. Turn it on
+    # (and reboot) once the NCM gadget is confirmed working on your Pi.
+    ml_command: bool = False
 
 
 @dataclass

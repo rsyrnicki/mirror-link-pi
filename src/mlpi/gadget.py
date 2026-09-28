@@ -79,12 +79,28 @@ def _modprobe(module: str, *, remove: bool = False) -> None:
 
 
 def _umount_ffs() -> None:
-    if os.path.ismount(FFS_MOUNT):
-        subprocess.run(["umount", str(FFS_MOUNT)], capture_output=True, timeout=20)
+    # Try a normal unmount, then a lazy one (a dead daemon can leave it "busy").
+    for args in (["umount", str(FFS_MOUNT)], ["umount", "-l", str(FFS_MOUNT)]):
+        if not os.path.ismount(FFS_MOUNT):
+            return
+        try:
+            subprocess.run(args, capture_output=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
+def _rmdir(path: Path) -> None:
+    """rmdir that never raises — configfs dirs must come down in order and a single
+    stuck entry (e.g. a still-mounted ffs function) must not abort the whole teardown."""
+    try:
+        path.rmdir()
+    except OSError as exc:
+        log.warning("could not remove %s: %s", path, exc)
 
 
 def teardown(gadget: Path) -> None:
-    """Remove a configfs gadget tree (reverse order of creation)."""
+    """Remove a configfs gadget tree (reverse order of creation). Never raises: a
+    leftover from a crashed run must not turn into a restart loop."""
     if not gadget.exists():
         return
     try:
@@ -95,15 +111,18 @@ def teardown(gadget: Path) -> None:
     for cfg in (gadget / "configs").glob("*"):
         for link in cfg.iterdir():
             if link.is_symlink():
-                link.unlink()
+                try:
+                    link.unlink()
+                except OSError as exc:
+                    log.warning("could not unlink %s: %s", link, exc)
         for strings in (cfg / "strings").glob("*"):
-            strings.rmdir()
-        cfg.rmdir()
+            _rmdir(strings)
+        _rmdir(cfg)
     for func in (gadget / "functions").glob("*"):
-        func.rmdir()
+        _rmdir(func)
     for strings in (gadget / "strings").glob("*"):
-        strings.rmdir()
-    gadget.rmdir()
+        _rmdir(strings)
+    _rmdir(gadget)
 
 
 def release_foreign_gadgets() -> list[str]:
@@ -240,6 +259,13 @@ def gadget_up(usb: UsbConfig, *, wait_udc: float = 30.0) -> dict[str, str]:
     released = release_foreign_gadgets()
     g = CONFIGFS / GADGET_NAME
     teardown(g)
+    if g.exists():
+        # A previous run left a gadget teardown couldn't fully remove (usually a
+        # still-mounted FunctionFS). Reboot clears configfs; say so instead of looping.
+        raise GadgetError(
+            f"{g} still present after teardown — a previous gadget is stuck "
+            "(often a busy FunctionFS mount). Reboot to clear configfs, and set "
+            "'[usb] ml_command = false' in mlpi.toml if it recurs.")
 
     func = usb.function
     if func not in ("ncm", "ecm", "rndis"):

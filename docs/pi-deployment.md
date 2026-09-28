@@ -55,7 +55,7 @@ and reboots once; allow 1–2 minutes. From then on, every boot starts:
 | Unit | Does |
 |---|---|
 | `mlpi-session.service` | creates `/var/lib/mlpi/sessions/NNNN` for this boot |
-| `mlpi-gadget.service` | USB gadget (CDC-NCM + MirrorLink USB command) + `usb0` = 192.168.7.2/24; stays running, logs USB events to `usb.jsonl` |
+| `mlpi-gadget.service` | USB gadget (CDC-NCM) + `usb0` = 192.168.7.2/24; stays running, logs USB events to `usb.jsonl`. Answering the MirrorLink USB command is opt-in (`[usb] ml_command`, off by default) |
 | `mlpi-capture.service` | records every frame on `usb0` into the session pcap |
 | `mlpi-journal.service` | copies the whole boot journal into the session |
 | `mlpi.service` | DHCP, SSDP, UPnP/SOAP, VNC server, status screen, LED |
@@ -79,8 +79,8 @@ The boot partition is FAT, so it can be edited on any computer. Useful knobs:
   one variant (e.g. after a winner was found).
 - `[usb] vid/pid` — pretend to be another vendor if a head unit filters on it.
 - `[watchdog] idle_reconnect_seconds = 0` — never soft re-plug.
-- `[usb] ml_command = false` — plain NCM gadget without the MirrorLink USB command
-  interface (the daemon also drops it by itself if the car does not like it).
+- `[usb] ml_command = true` — also answer the MirrorLink USB command via a FunctionFS
+  interface (experimental; off by default, needs a reboot to take effect).
 
 Variants themselves are in `/opt/mlpi/config/variants.toml` on the rootfs (re-run
 `prepare-sd.sh` after editing the repo copy).

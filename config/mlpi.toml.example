@@ -21,6 +21,9 @@ vid = "0x1d6b"
 pid = "0x0104"
 function = "ncm"            # ncm | ecm | rndis
 address = "192.168.7.2/24"  # static address of usb0 on the Pi
+# Answer the MirrorLink USB command via a FunctionFS interface (experimental,
+# off by default). Enable only after the plain gadget works, then reboot.
+ml_command = false
 
 [dhcp]
 client_address = "192.168.7.44"   # what the car gets (same as all earlier sessions)

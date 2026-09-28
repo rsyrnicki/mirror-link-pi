@@ -27,7 +27,7 @@ interoperability is possible with MirrorLink 1.0 devices" (§7.6 note).
 
 | Clause | Requirement | Us |
 |---|---|---|
-| §4.2.2 | Client sends vendor request `bmRequestType 0x40, bRequest 0xF0, wValue = ML version (low byte major, high byte minor), wIndex = host VID, wLength 0`. Server enables CDC/NCM + SSDP. | Answered via a FunctionFS interface (`gadget.py`); version recorded in `usb.jsonl`. |
+| §4.2.2 | Client sends vendor request `bmRequestType 0x40, bRequest 0xF0, wValue = ML version (low byte major, high byte minor), wIndex = host VID, wLength 0`. Server enables CDC/NCM + SSDP. | Can be answered via a FunctionFS interface (`gadget.py`), **off by default** (`[usb] ml_command`) as it is hardware-fragile; version recorded in `usb.jsonl` when on. |
 | §4.2.3 | A server that can't do MirrorLink STALLs it. A client detects a MirrorLink server by: command not STALLed **and** CDC/NCM **and** UPnP. | Before: the Linux gadget STALLed → the car may have classified us as "not a MirrorLink server". Now ACKed. Auto-fallback to NCM-only if the host dislikes the extra interface. |
 | §5.2 | CDC/NCM, NTB-16. | `ncm` function. |
 | §5.4.1 | Server has a DHCP server; addresses in 192.168.x.y with x = 2…127. | 192.168.7.2 / .44 ✓ |
