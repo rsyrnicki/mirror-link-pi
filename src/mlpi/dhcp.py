@@ -22,6 +22,7 @@ import socket
 import struct
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 
 from .session import STAGE_DHCP, Session
@@ -269,3 +270,85 @@ class DhcpServer:
         except (OSError, subprocess.SubprocessError) as exc:
             log.warning("could not add neighbour entry (%s); broadcasting instead", exc)
             return "255.255.255.255"
+
+
+# ---------- client (used by probe-phone, where the phone is the DHCP server) ----------
+
+def _client_packet(msg_type: int, xid: int, mac: bytes, *, requested: str | None = None,
+                   server_id: str | None = None, ciaddr: str = "0.0.0.0") -> bytes:
+    header = struct.pack("!BBBBIHH4s4s4s4s16s64s128s", 1, 1, 6, 0, xid, 0, 0x8000,
+                         socket.inet_aton(ciaddr), b"\0" * 4, b"\0" * 4, b"\0" * 4,
+                         mac.ljust(16, b"\0"), b"", b"")
+    opts = bytearray(MAGIC_COOKIE)
+    opts += bytes([OPT_MSG_TYPE, 1, msg_type])
+    if requested:
+        opts += bytes([OPT_REQUESTED_IP, 4]) + socket.inet_aton(requested)
+    if server_id:
+        opts += bytes([OPT_SERVER_ID, 4]) + socket.inet_aton(server_id)
+    opts += bytes([OPT_HOSTNAME, 4]) + b"mlpi"
+    opts += bytes([OPT_PARAM_LIST, 3, OPT_SUBNET, OPT_ROUTER, OPT_DNS])
+    opts.append(OPT_END)
+    return (header + bytes(opts)).ljust(300, b"\0")
+
+
+def dhcp_client(interface: str, mac: bytes, *, timeout: float = 20.0,
+                on_event=lambda kind, **f: None) -> dict[str, str]:
+    """Obtain a lease on ``interface`` (the phone is the server). Returns
+    {"address", "netmask", "server", "router"}; raises TimeoutError on no reply."""
+    import random
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, interface.encode())
+    sock.bind(("", 68))
+    sock.settimeout(2.0)
+    xid = random.getrandbits(32)
+    deadline = time.monotonic() + timeout
+    try:
+        sock.sendto(_client_packet(DISCOVER, xid, mac), ("255.255.255.255", 67))
+        on_event("dhcp_tx", msg_type="DISCOVER", xid=f"{xid:08x}")
+        offer = None
+        while time.monotonic() < deadline and offer is None:
+            try:
+                data, _ = sock.recvfrom(4096)
+            except TimeoutError:
+                sock.sendto(_client_packet(DISCOVER, xid, mac), ("255.255.255.255", 67))
+                continue
+            pkt = parse_packet(data)
+            if pkt.xid == xid and pkt.msg_type == OFFER:
+                offer = pkt
+        if offer is None:
+            raise TimeoutError("no DHCP OFFER from the phone")
+        server = socket.inet_ntoa(offer.options[OPT_SERVER_ID])
+        on_event("dhcp_rx", msg_type="OFFER", yiaddr=offer.yiaddr, server=server)
+
+        sock.sendto(_client_packet(REQUEST, xid, mac, requested=offer.yiaddr,
+                                   server_id=server), ("255.255.255.255", 67))
+        while time.monotonic() < deadline:
+            try:
+                data, _ = sock.recvfrom(4096)
+            except TimeoutError:
+                continue
+            pkt = parse_packet(data)
+            if pkt.xid != xid:
+                continue
+            if pkt.msg_type == ACK:
+                netmask = (socket.inet_ntoa(pkt.options[OPT_SUBNET])
+                           if OPT_SUBNET in pkt.options else "255.255.255.0")
+                router = (socket.inet_ntoa(pkt.options[OPT_ROUTER])
+                          if OPT_ROUTER in pkt.options else "")
+                lease = {"address": pkt.yiaddr, "netmask": netmask, "server": server,
+                         "router": router}
+                on_event("dhcp_rx", msg_type="ACK", **lease)
+                # Configure the interface (ip is present on Pi OS / Fedora).
+                prefix = sum(bin(int(o)).count("1") for o in netmask.split("."))
+                subprocess.run(["ip", "addr", "replace", f"{pkt.yiaddr}/{prefix}",
+                                "dev", interface], check=False)
+                subprocess.run(["ip", "link", "set", interface, "up"], check=False)
+                return lease
+            if pkt.msg_type == NAK:
+                raise TimeoutError("phone sent DHCPNAK")
+        raise TimeoutError("no DHCP ACK from the phone")
+    finally:
+        sock.close()

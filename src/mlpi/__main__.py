@@ -8,6 +8,8 @@ On the Pi (started by systemd, see systemd/):
   run            the MirrorLink server itself                 (mlpi.service)
 
 On the laptop:
+  probe-phone    drive a real MirrorLink phone as a reference implementation, saving
+                 its descriptor, app list, DAP certificates and screen (Linux, root)
   simulate-car   play the recorded VW head-unit handshake against a server, then
                  connect to its VNC server and save a screenshot
   report         summarise a session directory brought back from the car
@@ -45,6 +47,17 @@ def main(argv: list[str] | None = None) -> int:
                        help="where to save the VNC frame (default: car-view.png)")
     p_sim.add_argument("--attempts", type=int, default=1,
                        help="repeat the handshake N times (exercises variant rotation)")
+
+    p_probe = sub.add_parser("probe-phone",
+                             help="probe a real MirrorLink phone as a reference (Linux, root)")
+    p_probe.add_argument("--list", action="store_true", help="list attached USB devices and exit")
+    p_probe.add_argument("--device", default="", help="target a device by BUS:ADDR")
+    p_probe.add_argument("--vendor", default="", help="target a USB vendor id, e.g. 0x04e8")
+    p_probe.add_argument("--version", default="1.1", choices=["1.0", "1.1", "1.2", "1.3"],
+                         help="MirrorLink version to announce in the USB command")
+    p_probe.add_argument("--interface", default="",
+                         help="skip the USB command; use this already-up interface")
+    p_probe.add_argument("--session-root", default="", help="where to record (default: config)")
 
     p_rep = sub.add_parser("report", help="summarise a session directory")
     p_rep.add_argument("session_dir", nargs="+")
@@ -90,6 +103,18 @@ def main(argv: list[str] | None = None) -> int:
         return simulate_car.run(
             target=args.target, http_port=args.http_port, callback_ip=args.callback_ip,
             vnc=not args.no_vnc, screenshot=Path(args.screenshot), attempts=args.attempts)
+
+    if args.cmd == "probe-phone":
+        from .tools import probe_phone
+        if args.list:
+            from . import usbhost
+            for d in usbhost.list_devices():
+                print(d.describe())
+            return 0
+        vendor = int(args.vendor, 16) if args.vendor else None
+        return probe_phone.run(cfg, device_spec=args.device, vendor=vendor,
+                               version=args.version, interface=args.interface,
+                               session_root=args.session_root)
 
     if args.cmd == "report":
         from .tools import report

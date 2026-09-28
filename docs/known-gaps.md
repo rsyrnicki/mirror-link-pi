@@ -36,9 +36,17 @@ as a control group.
 ## 2. CCC certificates
 
 The CCC dissolved around 2020–21 and certified phones' certificate chains have
-expired; old certified phones no longer pair with Robert's car. We have no CCC key.
-If the car enforces attestation, options are an engineering-mode switch on the head
-unit, older firmware, or MITM of its trust store. Don't guess before the data says so.
+expired; old certified phones no longer pair with Robert's car. We have no CCC key,
+and can't get one from the car's side. Passing DAP needs a device key whose
+certificate chains to the CCC root — a copied response can't be replayed (fresh nonce
+per connection), and extracting a phone's key means defeating its secure element.
+
+**Measure before guessing:** `mlpi probe-phone` ([`probe-phone.md`](probe-phone.md))
+drives a real certified phone (Galaxy S6) and saves its DAP certificates with their
+validity dates. If they're expired, the wall is expiry (and a car without a clock
+may not check it — Part 4 §5). If the car enforces attestation regardless, the only
+routes are a 1.0 session (uncertified, parked only), a head-unit engineering mode, or
+older firmware. Don't guess before the probe data says so.
 
 ## 3. MirrorLink VNC extensions
 

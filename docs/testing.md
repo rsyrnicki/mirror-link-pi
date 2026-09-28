@@ -20,6 +20,8 @@ PYTHONPATH=src python3 -m pytest
 | `test_session.py` | boot counter, sticky stages, summary |
 | `test_mirrorlink.py` | MirrorLink VNC message layouts (Part 2 tables), DAP stub |
 | `test_gadget.py` | FunctionFS descriptor/strings blobs, USB command parsing, ACK/STALL |
+| `test_usbhost.py` | host-side MirrorLink USB command struct + ioctl layout |
+| `test_probe_phone.py` | descriptor/URI parsing, DAP certificate extraction, DHCP client packets |
 | `test_rfb.py` | RFB 3.3/3.7 clients, colour-map clients, MirrorLink extension + unknown messages recorded |
 | `test_end_to_end.py` | real HTTP + VNC servers on localhost driven by the car simulator (full MirrorLink VNC handshake, context info, device status, ByeBye) |
 

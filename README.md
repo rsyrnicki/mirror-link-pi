@@ -47,6 +47,7 @@ Details: [`docs/pi-deployment.md`](docs/pi-deployment.md) (SD card),
 [`docs/field-test.md`](docs/field-test.md) (the trip),
 [`docs/laptop-dev.md`](docs/laptop-dev.md) (development),
 [`docs/spec-notes.md`](docs/spec-notes.md) (the MirrorLink spec, clause by clause),
+[`docs/probe-phone.md`](docs/probe-phone.md) (measuring a real MirrorLink phone),
 [`docs/known-gaps.md`](docs/known-gaps.md) (what we know we don't know).
 
 ## Repo layout
@@ -54,7 +55,7 @@ Details: [`docs/pi-deployment.md`](docs/pi-deployment.md) (SD card),
 | Path | What |
 |---|---|
 | `src/mlpi/` | the server: `dhcp`, `ssdp`, `http_descriptor` + `soap` + `eventing`, `rfb` + `mirrorlink_vnc` + `canvas` + `screen`, `dap`, `variants`, `session`, `capture`, `gadget`, `led`, `runner` |
-| `src/mlpi/tools/` | `simulate_car` (recorded VW handshake + VNC client), `report`, `discover` |
+| `src/mlpi/tools/` | `simulate_car` (recorded VW handshake + VNC client), `probe_phone` (drive a real phone), `report`, `discover` |
 | `config/` | device descriptor template, SCPDs, `variants.toml`, `mlpi.toml.example` |
 | `systemd/` | units started at boot on the Pi |
 | `scripts/` | `prepare-sd.sh`, `collect-logs.sh`, `fetch-spec.sh` (laptop); `probe-sai-*` (VW SAI research) |
