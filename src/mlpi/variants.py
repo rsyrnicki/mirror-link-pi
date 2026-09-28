@@ -37,21 +37,36 @@ SIMULATOR_USER_AGENT = "mlpi-simulate-car"
 
 @dataclass(frozen=True)
 class Variant:
-    """Knobs that change what the head unit sees. Defaults = session-3 behaviour."""
+    """Knobs that change what the head unit sees.
 
-    name: str = "baseline"
+    Defaults follow ETSI TS 103 544 v1.3.1 (see docs/spec-notes.md) for a
+    MirrorLink 1.0 server offering one stand-alone VNC server.
+    """
+
+    name: str = "spec-1.0"
     description: str = ""
-    # Device descriptor: "" = omit <X_mirrorLinkVersion> (client assumes 1.0).
+    # Device XML: "" = omit <X_mirrorLinkVersion> (Part 13 §7.6: client then treats
+    # us as 1.0, which needs no DAP). "1.1" etc. = declare that version.
     ml_version: str = ""
-    # AppListing entry of the VNC server app.
-    app_category: str = "0x00000000"
-    app_trust_level: str = "0x0080"      # "" = omit <appInfo><trustLevel>
-    audio_info: bool = True              # <audioInfo> block
-    audio_trust_level: str = "0x0080"    # "" = omit <audioInfo><trustLevel>
+    # AppListing entry of the stand-alone VNC server. Part 9 §5.2.1: protocolID VNC,
+    # appCategory 0xF0000001 ("Server functionality").
+    app_category: str = "0xF0000001"
+    app_trust_level: str = ""            # "" = omit <appInfo><trustLevel>
+    audio_info: bool = False             # <audioInfo> block (Part 9: for audio links)
+    audio_trust_level: str = ""          # "" = omit <audioInfo><trustLevel>
     display_content_category: str = ""   # "" = omit <displayInfo>
-    cert_url: bool = True                # <appCertificateURL>
-    # LaunchApplication response: "<scheme>://<address>:<port>"
-    uri_scheme: str = "vnc"
+    cert_url: bool = False               # <appCertificateURL>
+    # Namespace on <appList> (the XSD defines one; the spec's example omits it).
+    applist_namespace: bool = True
+    # Extra entries: a VNC "home screen" UI application (Part 9 Annex A 0x00010001)
+    # and a Device Attestation Protocol endpoint (Part 9 §5.2.5, Part 4).
+    home_app: bool = False
+    dap: bool = False
+    # LaunchApplication AppURI: "<scheme>://<address>:<port>" (Part 9 Table 4-7).
+    uri_scheme: str = "VNC"
+    # VNC Context Information (Part 2 §8.3) sent with framebuffer updates.
+    context_app_category: str = "0x00010001"   # Home screen
+    context_trust_level: str = "0x0080"
 
 
 def load_variants(path: Path | None = None) -> list[Variant]:
@@ -81,7 +96,7 @@ class VariantManager:
         variants: list[Variant],
         *,
         mode: str = "rotate",
-        fixed_variant: str = "baseline",
+        fixed_variant: str = "spec-1.0",
         attempt_gap_seconds: float = 4.0,
         session: Session | None = None,
         state_dir: Path | None = None,

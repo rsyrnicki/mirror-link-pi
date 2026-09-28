@@ -1,67 +1,63 @@
 # Protocol variants, tried in this order — one per connection attempt of the car —
 # until the car opens a TCP connection to the VNC port. See src/mlpi/variants.py.
 #
-# Every key is optional; omitted keys take the "baseline" value, which reproduces
-# the last car session (2026-05-02, launch-realcert.pcap) except for the
-# ClientProfile double-escaping bug, which is fixed for all variants.
+# Every key is optional; omitted keys take the default, which follows the MirrorLink
+# spec (ETSI TS 103 544 v1.3.1) for a MirrorLink 1.0 server: stand-alone VNC server
+# entry with appCategory 0xF0000001, no X_mirrorLinkVersion (so no DAP needed).
+# docs/spec-notes.md explains the clauses behind each knob.
 #
 # Keys:
-#   ml_version                ""/"1.0"/"1.1" — <X_mirrorLinkVersion> in the device
-#                             descriptor ("" = omitted; spec says client assumes 1.0)
-#   app_category              <appInfo><appCategory> of the VNC app entry
+#   ml_version                ""/"1.0"/"1.1" — <X_mirrorLinkVersion> in the device XML
+#                             ("" = omitted: client must assume 1.0, Part 13 §7.6)
+#   app_category              appCategory of the VNC server entry (spec: 0xF0000001)
 #   app_trust_level           <appInfo><trustLevel>   ("" = omitted)
-#   audio_info                include the <audioInfo> block
+#   audio_info                include an <audioInfo> block in the VNC entry
 #   audio_trust_level         <audioInfo><trustLevel> ("" = omitted)
 #   display_content_category  add <displayInfo><contentCategory> ("" = no displayInfo)
 #   cert_url                  include <appCertificateURL>
+#   applist_namespace         xmlns on <appList> (XSD has it, spec example doesn't)
+#   home_app                  also list a VNC "home screen" UI app (category 0x00010001)
+#   dap                       also list a DAP endpoint (answers "attestation not
+#                             available" — we have no CCC certificate)
 #   uri_scheme                scheme of the AppURI returned by LaunchApplication
+#   context_app_category      VNC context information: application category
+#   context_trust_level       VNC context information: trust level
 #
-# Hypotheses below are marked with how sure we are. Keep the list short: the car
-# needs ~10 s per attempt, so 8 variants ≈ 1.5 min per full round.
+# The car needs ~10 s per attempt: 6 variants ≈ 1 minute per full round.
 
 [[variant]]
-name = "baseline"
-description = "Session-3 app list with the ClientProfile escaping fixed. Tests whether the bug alone was blocking."
+name = "spec-1.0"
+description = "Spec-compliant MirrorLink 1.0 server: one stand-alone VNC server entry (0xF0000001), nothing else."
 
 [[variant]]
-name = "ml11"
-description = "Declare MirrorLink 1.1 in the descriptor. MIB II Std is a 1.1 client; it may bail on a (defaulted) 1.0 server."
+name = "spec-1.1-dap"
+description = "Declares MirrorLink 1.1 (MIB II Std is a 1.1 client) and lists a DAP endpoint, as a 1.1 client expects to run DAP first."
+ml_version = "1.1"
+dap = true
+
+[[variant]]
+name = "spec-1.0-home"
+description = "spec-1.0 plus a VNC 'home screen' UI application the car can list and launch."
+home_app = true
+
+[[variant]]
+name = "spec-1.1"
+description = "MirrorLink 1.1 without a DAP endpoint (1.1/1.2 clients may skip DAP, Part 4 note)."
 ml_version = "1.1"
 
 [[variant]]
-name = "minimal"
-description = "Bare app entry: no audioInfo, no trust levels, no certificate URL. Removes every claim we cannot back up."
-audio_info = false
-app_trust_level = ""
-audio_trust_level = ""
-cert_url = false
-
-[[variant]]
-name = "ml11-minimal"
-description = "ml11 + minimal."
+name = "spec-1.1-dap-home"
+description = "MirrorLink 1.1 with DAP endpoint and home screen application."
 ml_version = "1.1"
-audio_info = false
-app_trust_level = ""
-audio_trust_level = ""
-cert_url = false
+dap = true
+home_app = true
 
 [[variant]]
-name = "ml10"
-description = "Explicit MirrorLink 1.0 in the descriptor instead of omitting the element."
-ml_version = "1.0"
-
-[[variant]]
-name = "uri-upper"
-description = "AppURI with upper-case scheme VNC:// (some specs/examples write it that way)."
-uri_scheme = "VNC"
-
-[[variant]]
-name = "no-audio"
-description = "Like baseline but without audioInfo: the car may wait for an RTP audio server we never start."
-audio_info = false
-
-[[variant]]
-name = "system-category"
-description = "UNVERIFIED (from memory of the ML app-category table): mark the VNC entry as a system/VNC-server component, 0xF0000001."
-app_category = "0xF0000001"
-audio_info = false
+name = "legacy-session3"
+description = "What the car saw in session 3 (non-spec category 0x00000000, audioInfo, trust claims, cert URL), with the escaping fix. Control group."
+app_category = "0x00000000"
+app_trust_level = "0x0080"
+audio_info = true
+audio_trust_level = "0x0080"
+cert_url = true
+uri_scheme = "vnc"

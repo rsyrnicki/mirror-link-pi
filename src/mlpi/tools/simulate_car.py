@@ -23,6 +23,7 @@ from html import unescape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from .. import mirrorlink_vnc as ml
 from ..variants import SIMULATOR_USER_AGENT
 
 USER_AGENT = f"QNX/6.5.0, UPnP/1.0, MiniUPnPc/1.5 {SIMULATOR_USER_AGENT}"
@@ -130,7 +131,7 @@ def upnp_handshake(target: str, port: int, callback_ip: str) -> str:
         if status != 200:
             raise SimulationError(f"descriptor → HTTP {status}")
         desc_text = desc.decode()
-        mlv = re.search(r"<X_mirrorLinkVersion>.*?</X_mirrorLinkVersion>", desc_text)
+        mlv = re.search(r"<X_mirrorLinkVersion[ >].*?</X_mirrorLinkVersion>", desc_text)
         print(f"  descriptor OK ({len(desc)} bytes), X_mirrorLinkVersion: "
               f"{mlv.group(0) if mlv else 'absent'}")
         _http(target, port, "GET", "//scpd/TmApplicationServer.xml")
@@ -149,7 +150,9 @@ def upnp_handshake(target: str, port: int, callback_ip: str) -> str:
                                             "NT": "upnp:event", "TIMEOUT": "Second-1800"})
         if status != 200 or "sid" not in headers:
             raise SimulationError(f"SUBSCRIBE → HTTP {status} {headers}")
-        _soap(target, port, "GetApplicationList")
+        app_list = _arg(_soap(target, port, "GetApplicationList"), "AppListing")
+        if "<protocolID>DAP</protocolID>" in app_list:
+            run_dap(target, port)
         app_uri = _arg(_soap(target, port, "LaunchApplication"), "AppURI")
         print(f"  LaunchApplication → AppURI {app_uri}")
         status_xml = _arg(_soap(target, port, "GetApplicationStatus(0x1)"), "AppStatus")
@@ -166,6 +169,27 @@ def upnp_handshake(target: str, port: int, callback_ip: str) -> str:
         notify_server.shutdown()
 
 
+def run_dap(target: str, port: int) -> None:
+    """What a MirrorLink 1.1 client does first (Part 13 §7.3.4, Part 4)."""
+    body = _ENV.format(f'<u:LaunchApplication xmlns:u="{_TM_APP}"><AppID>0x00000003</AppID>'
+                       '<ProfileID>0</ProfileID></u:LaunchApplication>').encode()
+    status, _, data = _http(target, port, "POST", "//ctrl/TmApplicationServer", body, {
+        "Content-Type": "text/xml", "SOAPAction": f'"{_TM_APP}#LaunchApplication"'})
+    uri = _arg(data.decode("utf-8", "replace"), "AppURI")
+    m = re.match(r"(?i)dap://([^:/]+):(\d+)", uri)
+    if status != 200 or not m:
+        raise SimulationError(f"DAP launch failed: HTTP {status} {uri!r}")
+    with socket.create_connection((m.group(1), int(m.group(2))), timeout=10) as sock:
+        sock.sendall(b"<attestationRequest><version><majorVersion>1</majorVersion>"
+                     b"<minorVersion>1</minorVersion></version><trustRoot>c2ltdWxhdG9y</trustRoot>"
+                     b"<nonce>c2ltdWxhdG9yLW5vbmNl</nonce><componentID>*</componentID>"
+                     b"</attestationRequest>")
+        reply = sock.recv(65536).decode("utf-8", "replace")
+    result = re.search(r"<result>(\d+)</result>", reply)
+    print(f"  DAP at {uri}: result {result.group(1) if result else '?'} "
+          "(1 = attestation not available → client treats us as uncertified)")
+
+
 # ---------- VNC side ----------
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -178,17 +202,43 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes:
     return bytes(buf)
 
 
-def _read_update(sock: socket.socket, fb: bytearray, width: int) -> int:
+def _read_ml_message(sock: socket.socket) -> tuple[int, bytes]:
+    """Read one MirrorLink extension message (after its type byte 128)."""
+    ext, length = struct.unpack("!BH", _recv_exact(sock, 3))
+    return ext, _recv_exact(sock, length)
+
+
+def _expect_ml(sock: socket.socket, want: int) -> bytes:
     msg_type = _recv_exact(sock, 1)[0]
-    while msg_type == 1:  # SetColourMapEntries: skip
-        _, n = struct.unpack("!xHH", _recv_exact(sock, 5))
-        _recv_exact(sock, 6 * n)
+    if msg_type != ml.MSG_MIRRORLINK:
+        raise SimulationError(f"expected MirrorLink message {want}, got RFB type {msg_type}")
+    ext, payload = _read_ml_message(sock)
+    if ext != want:
+        raise SimulationError(f"expected MirrorLink extension {want}, got {ext}")
+    return payload
+
+
+def _read_update(sock: socket.socket, fb: bytearray, width: int,
+                 context: list | None = None) -> int:
+    msg_type = _recv_exact(sock, 1)[0]
+    while msg_type in (1, ml.MSG_MIRRORLINK):
+        if msg_type == 1:  # SetColourMapEntries: skip
+            _, n = struct.unpack("!xHH", _recv_exact(sock, 5))
+            _recv_exact(sock, 6 * n)
+        else:
+            _read_ml_message(sock)
         msg_type = _recv_exact(sock, 1)[0]
     if msg_type != 0:
         raise SimulationError(f"unexpected server message type {msg_type}")
     (count,) = struct.unpack("!xH", _recv_exact(sock, 3))
     for _ in range(count):
         x, y, w, h, enc = struct.unpack("!HHHHi", _recv_exact(sock, 12))
+        if enc == ml.ENC_CONTEXT_INFO:
+            app_id, trust, _t2, app_cat, content_cat, _rules = struct.unpack(
+                "!IHHIII", _recv_exact(sock, 20))
+            if context is not None:
+                context.append((app_id, trust, app_cat, content_cat))
+            continue
         if enc != 0:
             raise SimulationError(f"unexpected encoding {enc}")
         data = _recv_exact(sock, w * h * 2)
@@ -223,19 +273,49 @@ def vnc_session(app_uri: str, screenshot: Path) -> None:
         (name_len,) = struct.unpack("!I", _recv_exact(sock, 4))
         name = _recv_exact(sock, name_len).decode()
         print(f"  VNC {version.decode().strip()} '{name}' {width}x{height}")
-        # Ask for RGB565 little-endian, as embedded head units commonly do.
+        # MirrorLink client flow (Part 2 §6.3, §7.3, §7.4): SetEncodings incl. -523
+        # and -524 first, answer the server's display and event configuration, then
+        # pick a pixel format the server offered (RGB565) and request a frame.
+        sock.sendall(struct.pack("!BxH3i", 2, 3, 0, ml.ENC_MIRRORLINK, ml.ENC_CONTEXT_INFO))
+        sdc = _expect_ml(sock, ml.EXT_SERVER_DISPLAY_CONFIG)
+        major, minor, _fbc, _rw, _rh, pixfmt = struct.unpack("!BBHHHI", sdc)
+        if not pixfmt & ml.PF_RGB565:
+            raise SimulationError(f"server does not offer RGB565: 0x{pixfmt:08x}")
+        sec = ml.decode_event_configuration(_expect_ml(sock, ml.EXT_SERVER_EVENT_CONFIG))
+        print(f"  MirrorLink VNC: server ML {major}.{minor}, pixel formats 0x{pixfmt:08x}, "
+              f"events {sec['knob_keys']}/{sec['device_keys']}, pointer {sec['pointer_events']}")
+        # ClientDisplayConfiguration: 800x480, 155x93 mm, distance unknown, RGB565.
+        sock.sendall(ml.message(ml.EXT_CLIENT_DISPLAY_CONFIG, struct.pack(
+            "!BBHHHHHHII", 1, 1, 0, width, height, 155, 93, 0, ml.PF_RGB565, 0)))
+        sock.sendall(ml.message(ml.EXT_CLIENT_EVENT_CONFIG, struct.pack(
+            "!HHHHIIIII", 0x6465, 0x4445, 0x6465, 0x4445, ml.KNOB0_REQUIRED,
+            ml.DEVICE_KEY_BACKWARD, 0, 0, 1 | (1 << 8))))
+        # Ask for the device status once (driver distraction: disabled = parked).
+        sock.sendall(ml.message(ml.EXT_DEVICE_STATUS_REQUEST,
+                                struct.pack("!I", ml.DS_DISABLED << 16)))
+        status = ml.decode_device_status(struct.unpack(
+            "!I", _expect_ml(sock, ml.EXT_DEVICE_STATUS))[0])
+        print(f"  DeviceStatus: {status}")
         pf = struct.pack("!BBBBHHHBBB3x", 16, 16, 0, 1, 31, 63, 31, 11, 5, 0)
         sock.sendall(b"\x00\x00\x00\x00" + pf)
-        sock.sendall(struct.pack("!BxHi", 2, 1, 0))
         sock.sendall(struct.pack("!BBHHHH", 3, 0, 0, 0, width, height))
         fb = bytearray(width * height * 3)
-        _read_update(sock, fb, width)
+        context: list = []
+        _read_update(sock, fb, width, context)
+        if not context:
+            raise SimulationError("first framebuffer update carried no context information")
+        app_id, trust, app_cat, _cc = context[0]
+        print(f"  context info: app 0x{app_id:x}, trust 0x{trust:04x}, "
+              f"category 0x{app_cat:08x}")
         # Touch the middle of the screen and wait for the echo.
         sock.sendall(struct.pack("!BBHH", 5, 1, width // 2, height // 2))
         sock.sendall(struct.pack("!BBHH", 5, 0, width // 2, height // 2))
         time.sleep(1.2)
         sock.sendall(struct.pack("!BBHHHH", 3, 1, 0, 0, width, height))
         _read_update(sock, fb, width)
+        # Intentional termination (§5.3): ByeBye, server answers ByeBye.
+        sock.sendall(ml.byebye())
+        _expect_ml(sock, ml.EXT_BYEBYE)
     finally:
         sock.close()
     from ..http_descriptor import encode_png

@@ -10,10 +10,13 @@ ServerInit, SetPixelFormat (8/16/32 bpp true colour and 8 bpp colour map),
 SetEncodings, FramebufferUpdateRequest (Raw encoding), KeyEvent, PointerEvent,
 ClientCutText.
 
-MirrorLink (CCC-TS-010) adds extension messages on top of RFB. We do not know their
-exact layout yet; client messages with type 128 are assumed to carry
-``U8 extension-type, U16 payload-length`` and are logged, not answered. Anything
-else unknown is dumped and the connection closed — the raw dump is the data we need.
+MirrorLink (ETSI TS 103 544-2, see mirrorlink_vnc.py): when the client announces
+the MirrorLink pseudo encoding (-523) we send ServerDisplayConfiguration and
+ServerEventConfiguration, decode the client's answers, answer DeviceStatusRequest
+and ByeBye, record blocking notifications and touch events, and — if the client
+announced -524 — prefix framebuffer updates with Context Information. Unknown
+extension types are read and ignored (§7.1). Unknown *RFB* message types have no
+length field, so for those we dump what follows and close.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
+from . import mirrorlink_vnc as ml
 from .canvas import (
     DEFAULT_PIXEL_FORMAT,
     Canvas,
@@ -49,8 +53,9 @@ MSG_MIRRORLINK = 128
 ENCODING_NAMES = {
     0: "Raw", 1: "CopyRect", 2: "RRE", 5: "Hextile", 6: "zlib", 7: "Tight", 16: "ZRLE",
     -223: "DesktopSize", -224: "LastRect", -239: "Cursor", -257: "PointerPos",
-    -308: "ExtendedDesktopSize", -523: "MirrorLink?", -524: "ContextInformation?",
-    -525: "DesktopSize(ML)?", -526: "RunLengthEncoding(ML)?",
+    -308: "ExtendedDesktopSize", -523: "MirrorLink", -524: "ContextInformation",
+    -525: "RunLengthEncoding(ML)", -526: "Transform(ML, deprecated)", -527: "HSML",
+    0x48323634: "VA H.264",
 }
 
 
@@ -63,7 +68,9 @@ class RfbServer:
                  session: Session | None = None,
                  on_connect: Callable[[str], None] | None = None,
                  screen=None, dump_dir: Path | None = None,
-                 dump_limit: int = 1_048_576) -> None:
+                 dump_limit: int = 1_048_576,
+                 ml_version: Callable[[], str] = lambda: "1.0",
+                 context_info: Callable[[], tuple[int, int, int, int]] | None = None) -> None:
         self.bind_address = bind_address
         self.port = port
         self.canvas = canvas
@@ -73,6 +80,8 @@ class RfbServer:
         self.screen = screen
         self.dump_dir = dump_dir
         self.dump_limit = dump_limit
+        self.ml_version = ml_version
+        self.context_info = context_info
         self._stop = threading.Event()
         self._sock: socket.socket | None = None
         self._count = 0
@@ -128,6 +137,11 @@ class RfbConnection:
         self.encoder = PixelEncoder(self.pf)
         self._send_colour_map = False
         self.encodings: list[int] = []
+        self.ml_active = False          # client announced -523
+        self.context_enabled = False    # client announced -524
+        self._context_sent: tuple | None = None
+        self._driver_distraction = ml.DS_UNKNOWN
+        self._byebye_sent = False
         self._alive = True
         self._req_cond = threading.Condition()
         self._request: tuple[bool, int, int, int, int] | None = None
@@ -267,9 +281,14 @@ class RfbConnection:
             elif msg_type == MSG_SET_ENCODINGS:
                 (count,) = struct.unpack("!xH", self._recv_exact(3))
                 encs = list(struct.unpack(f"!{count}i", self._recv_exact(4 * count)))
-                self.encodings = encs
+                # Later SetEncodings don't invalidate earlier ones (Part 2 §6.3).
+                self.encodings = encs + [e for e in self.encodings if e not in encs]
                 self._event("vnc_set_encodings", encodings=encs,
                             names=[ENCODING_NAMES.get(e, str(e)) for e in encs])
+                if ml.ENC_CONTEXT_INFO in encs:
+                    self.context_enabled = True
+                if ml.ENC_MIRRORLINK in encs and not self.ml_active:
+                    self._start_mirrorlink()
             elif msg_type == MSG_FB_UPDATE_REQUEST:
                 inc, x, y, w, h = struct.unpack("!BHHHH", self._recv_exact(9))
                 if self._should_log(msg_type):
@@ -295,15 +314,63 @@ class RfbConnection:
             elif msg_type == MSG_MIRRORLINK:
                 sub, length = struct.unpack("!BH", self._recv_exact(3))
                 payload = self._recv_exact(length)
-                self._event("vnc_mirrorlink_msg", ext_type=sub, length=length,
-                            payload_hex=payload[:1024].hex())
-                log.info("VNC MirrorLink extension message type %d (%d bytes)", sub, length)
+                self._handle_mirrorlink(sub, payload)
             else:
                 self._event("vnc_unknown_msg", msg_type=msg_type)
                 log.warning("VNC unknown client message type %d — dumping and closing",
                             msg_type)
                 self._drain_for(3.0)
                 raise _Closed(f"unknown client message type {msg_type}")
+
+    # ----- MirrorLink extension messages (Part 2 §7) -----
+
+    def _start_mirrorlink(self) -> None:
+        """§7.3.1/§7.4: answer the -523 SetEncodings with display, then event config."""
+        self.ml_active = True
+        version = self.server.ml_version()
+        major, _, minor = version.partition(".")
+        self._send(ml.server_display_configuration(int(major), int(minor or 0)))
+        self._send(ml.server_event_configuration())
+        self._event("vnc_ml_server_config_sent", version=version)
+        log.info("VNC #%d: MirrorLink session, sent server display/event config (ML %s)",
+                 self.number, version)
+
+    def _handle_mirrorlink(self, ext: int, payload: bytes) -> None:
+        name = ml.EXT_NAMES.get(ext, f"unknown({ext})")
+        fields: dict[str, object] = {"ext_type": ext, "name": name, "length": len(payload),
+                                     "payload_hex": payload[:1024].hex()}
+        if ext == ml.EXT_CLIENT_DISPLAY_CONFIG:
+            fields["decoded"] = ml.decode_client_display_configuration(payload)
+        elif ext == ml.EXT_CLIENT_EVENT_CONFIG:
+            fields["decoded"] = ml.decode_event_configuration(payload)
+        elif ext == ml.EXT_DEVICE_STATUS_REQUEST and len(payload) >= 4:
+            (value,) = struct.unpack_from("!I", payload)
+            decoded = ml.decode_device_status(value)
+            fields["decoded"] = decoded
+            if decoded["driver_distraction"] in (ml.DS_DISABLED, ml.DS_ENABLED):
+                self._driver_distraction = decoded["driver_distraction"]
+        elif ext == ml.EXT_FB_BLOCKING_NOTIFICATION:
+            fields["decoded"] = ml.decode_blocking_notification(payload)
+            log.warning("VNC #%d: client BLOCKS our framebuffer: %s", self.number,
+                        fields["decoded"])
+        elif ext == ml.EXT_TOUCH_EVENT:
+            touches = ml.decode_touch_event(payload)
+            fields["decoded"] = touches
+            if self.server.screen and touches:
+                t0 = touches[0]
+                self.server.screen.on_pointer(t0["x"], t0["y"], 1 if t0["pressure"] else 0)
+        self._event("vnc_mirrorlink_msg", **fields)
+        log.info("VNC #%d: MirrorLink %s (%d bytes)", self.number, name, len(payload))
+
+        if ext == ml.EXT_DEVICE_STATUS_REQUEST:
+            # §7.6: respond within 1 s with our (possibly unchanged) status.
+            self._send(ml.device_status(driver_distraction=self._driver_distraction))
+        elif ext == ml.EXT_BYEBYE:
+            # §7.2: answer ByeBye, then the client disconnects.
+            if not self._byebye_sent:
+                self._byebye_sent = True
+                self._send(ml.byebye())
+            raise _Closed("client sent ByeBye")
 
     def _drain_for(self, seconds: float) -> None:
         self.sock.settimeout(seconds)
@@ -365,7 +432,7 @@ class RfbConnection:
                     if self._request is req:
                         self._request = None
                     self._sent_version = version
-                self._send_update(encoder, rect)
+                self._send_update(encoder, rect, incremental=inc and sent_version >= 0)
                 if self.server.screen:
                     self.server.screen.on_frame()
                 if first:
@@ -381,12 +448,26 @@ class RfbConnection:
             except OSError:
                 pass
 
-    def _send_update(self, encoder: PixelEncoder, rect: tuple[int, int, int, int]) -> None:
+    def _send_update(self, encoder: PixelEncoder, rect: tuple[int, int, int, int], *,
+                     incremental: bool = False) -> None:
         x0, y0, x1, y1 = rect
         w, h = x1 - x0, y1 - y0
         pixels = self.canvas.encode_rect(encoder, x0, y0, w, h)
-        header = struct.pack("!BxH", 0, 1) + struct.pack("!HHHHi", x0, y0, w, h, 0)
-        self._send(header + pixels)
+        rects = [struct.pack("!HHHHi", x0, y0, w, h, 0) + pixels]
+        # Part 2 §8.3: context information in the first update, on every
+        # non-incremental one and on change — before the framebuffer data.
+        if self.context_enabled and self.server.context_info is not None:
+            context = self.server.context_info()
+            if not incremental or context != self._context_sent:
+                app_id, trust, app_cat, content_cat = context
+                rects.insert(0, ml.context_information_rect(
+                    self.canvas.width, self.canvas.height, app_id=app_id, trust=trust,
+                    app_category=app_cat, content_category=content_cat))
+                if context != self._context_sent:
+                    self._event("vnc_context_info_sent", app_id=f"0x{app_id:08x}",
+                                trust=f"0x{trust:04x}", app_category=f"0x{app_cat:08x}")
+                self._context_sent = context
+        self._send(struct.pack("!BxH", 0, len(rects)) + b"".join(rects))
 
 
 def _intersect(a: tuple[int, int, int, int], b: tuple[int, int, int, int]

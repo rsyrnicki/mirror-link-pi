@@ -14,15 +14,24 @@ any capture. From the second round on it fetches our icon, so it does list us.
 **Fixed since:** SetClientProfile/GetClientProfile echoed the profile *double-escaped*
 (`&amp;lt;clientProfile…`) — the car got text instead of its profile back.
 
-**Hypotheses, now tested automatically by variant rotation** (`config/variants.toml`):
-escaping alone; `X_mirrorLinkVersion` 1.1 / explicit 1.0; dropping claims we can't back
-(trust levels, audioInfo, cert URL); upper-case `VNC://`; a system app category.
+**Found in the spec since** ([`spec-notes.md`](spec-notes.md)), all fixed:
+- we STALLed the **MirrorLink USB command** (Part 1 §4.2.2) — per §4.2.3 that tells
+  the car "no MirrorLink server here"; now answered via FunctionFS;
+- the VNC server entry must have **appCategory 0xF0000001** (Part 9 §5.2.1); we sent
+  0x00000000;
+- `X_mirrorLinkVersion` was in the wrong XML namespace (Part 12 §5);
+- a 1.1 client expects a **DAP** endpoint in the app list (Part 13 §7.3.4).
 
-**If no variant works**, next candidates (need spec access or more captures):
-- a real MirrorLink phone's AppList/descriptor for comparison (a capture of any
-  certified phone against any head unit would settle most of this);
-- DAP (device attestation) / `X_Signature` enforcement for 1.1;
-- RTP audio server entries, since the car's ClientProfile announces RTP payloads 98/99.
+**Tested automatically by variant rotation** (`config/variants.toml`): ML 1.0 vs 1.1,
+with/without DAP stub, with/without a home-screen app, plus the old session-3 listing
+as a control group.
+
+**If no variant works**, next candidates:
+- RTP audio server entries (Part 9 §5.2.3; the car's ClientProfile announces RTP
+  payloads 98/99, and Part 13 §7.3.5 says audio is set up at session start);
+- the car may insist on successful DAP / `X_Signature` for 1.1 — not achievable
+  without a CCC key; then only a 1.0 session is possible;
+- a capture of any certified phone against any head unit would settle the rest.
 
 ## 2. CCC certificates
 
@@ -33,11 +42,10 @@ unit, older firmware, or MITM of its trust store. Don't guess before the data sa
 
 ## 3. MirrorLink VNC extensions
 
-CCC-TS-010 adds VNC extension messages (display/event configuration, context
-information, …). Our RFB server speaks plain RFB 3.8 with Raw encoding; client
-messages of type 128 are *assumed* to be `U8 ext-type, U16 length, payload` and are
-logged, not answered. Anything else unknown is dumped raw (`vnc-N-rx.bin`) and the
-connection closed. First real VNC connection = the data to implement this properly.
+Implemented from Part 2: display/event configuration, device status, ByeBye, context
+information, blocking notifications and touch events are decoded. Not implemented:
+content attestation (needs the DAP key), H.264/HSML encodings, server-side scaling.
+The first real VNC connection is still recorded byte for byte (`vnc-N-rx.bin`).
 
 ## 4. USB VID/PID
 

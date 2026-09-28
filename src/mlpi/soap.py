@@ -36,9 +36,24 @@ from .variants import Variant
 log = logging.getLogger(__name__)
 
 
-# Single VNC application advertised. ID must be non-zero per Part 9 §4.2.5.
-VNC_APP_ID = "0x00000001"
+# Applications we can advertise. IDs must be non-zero per Part 9 §4.2.5.
+VNC_APP_ID = "0x00000001"      # stand-alone VNC server (always listed)
+HOME_APP_ID = "0x00000002"     # VNC "home screen" UI application (variant.home_app)
+DAP_APP_ID = "0x00000003"      # Device Attestation Protocol endpoint (variant.dap)
 VNC_APP_ID_INT = int(VNC_APP_ID, 16)
+HOME_APP_ID_INT = int(HOME_APP_ID, 16)
+DAP_APP_ID_INT = int(DAP_APP_ID, 16)
+
+APPLIST_NS = "urn:schemas-upnp-org:tmapplicationserver:applist-1-0"
+
+
+def advertised_app_ids(variant: Variant) -> list[str]:
+    ids = [VNC_APP_ID]
+    if variant.home_app:
+        ids.append(HOME_APP_ID)
+    if variant.dap:
+        ids.append(DAP_APP_ID)
+    return ids
 
 
 def _parse_app_id(raw: str) -> int | None:
@@ -71,30 +86,27 @@ DEFAULT_CLIENT_PROFILE_XML = (
 
 
 def render_app_listing(ctx: ServerContext, variant: Variant) -> str:
-    """Build an AppListing XML advertising one stand-alone VNC server.
+    """Build the A_ARG_TYPE_AppList for the active experiment ``variant``.
 
-    Strict-required fields per Part 9 Table 4-3 are: appID, name (in app),
-    protocolID (in remotingInfo), plus iconList/icon (required for VNC apps per
-    the same table). Everything else (appInfo, displayInfo, audioInfo,
-    resourceStatus, trustLevel, Signature) is optional; the §4.2.7 implementation
-    note also permits 1.0/1.1 servers to omit the Signature. Which optional parts
-    we send is decided by the active experiment ``variant``.
+    Always: the stand-alone VNC server, identified per Part 9 §5.2.1 by protocolID
+    "VNC" and appCategory "0xF0000001" (Server functionality). Optionally a VNC
+    home-screen UI application and a DAP endpoint (§5.2.5: protocolID "DAP",
+    appCategory "0xF0000001", format = MirrorLink version). Required per app
+    (Table 4-3): appID, name, remotingInfo/protocolID; icons for VNC apps.
+    1.0/1.1 servers may omit the Signature (§4.2.7 implementation note).
     """
     icon_url = f"http://{ctx.address}:{ctx.http_port}/icon/mlpi.png"
     cert_url = f"http://{ctx.address}:{ctx.http_port}/cert/mlpi.cert"
-    parts = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        '<appList xmlns="urn:schemas-upnp-org:tmapplicationserver:applist-1-0">',
-        '<app>',
-        f'<appID>{VNC_APP_ID}</appID>',
-        f'<name>{_xml_escape(ctx.app_name)}</name>',
-        '<iconList><icon>',
-        '<mimetype>image/png</mimetype>',
-        '<width>128</width><height>128</height><depth>24</depth>',
-        f'<url>{_xml_escape(icon_url)}</url>',
-        '</icon></iconList>',
-        '<remotingInfo><protocolID>VNC</protocolID></remotingInfo>',
-    ]
+    icon = ('<iconList><icon><mimetype>image/png</mimetype>'
+            '<width>128</width><height>128</height><depth>24</depth>'
+            f'<url>{_xml_escape(icon_url)}</url></icon></iconList>')
+    ns = f' xmlns="{APPLIST_NS}"' if variant.applist_namespace else ""
+    parts = ['<?xml version="1.0" encoding="UTF-8"?>', f'<appList{ns}>']
+
+    # 1) stand-alone VNC server
+    parts += ['<app>', f'<appID>{VNC_APP_ID}</appID>',
+              f'<name>{_xml_escape(ctx.app_name)}</name>', icon,
+              '<remotingInfo><protocolID>VNC</protocolID></remotingInfo>']
     if variant.cert_url:
         parts.append(f'<appCertificateURL>{_xml_escape(cert_url)}</appCertificateURL>')
     parts.append('<appInfo>')
@@ -114,12 +126,36 @@ def render_app_listing(ctx: ServerContext, variant: Variant) -> str:
         if variant.audio_trust_level:
             parts.append(f'<trustLevel>{_xml_escape(variant.audio_trust_level)}</trustLevel>')
         parts.append('</audioInfo>')
-    # Per Part 9, "free" = slot available, "busy" = in use. After Launch, MIB II may
-    # re-fetch the AppList; reporting "free" while GetApplicationStatus says
-    # Foreground would be contradictory, so reflect the runtime status.
+    # "free" = available, "busy" = in use (Part 9 Table 4-3). Reflect runtime status
+    # so the list never contradicts GetApplicationStatus.
     busy = ctx.app_status.get(VNC_APP_ID_INT) in ("Foreground", "Background")
     parts.append(f'<resourceStatus>{"busy" if busy else "free"}</resourceStatus>')
-    parts.append('</app></appList>')
+    parts.append('</app>')
+
+    # 2) home screen UI application, remoted over the same VNC server
+    if variant.home_app:
+        parts += ['<app>', f'<appID>{HOME_APP_ID}</appID>',
+                  f'<name>{_xml_escape(ctx.home_app_name)}</name>',
+                  '<description>MirrorLink-Pi status screen</description>', icon,
+                  '<remotingInfo><protocolID>VNC</protocolID></remotingInfo>',
+                  '<appInfo><appCategory>0x00010001</appCategory>'
+                  f'<trustLevel>{_xml_escape(variant.context_trust_level)}</trustLevel>'
+                  '</appInfo>',
+                  '<displayInfo><contentCategory>0x00000000</contentCategory>'
+                  f'<trustLevel>{_xml_escape(variant.context_trust_level)}</trustLevel>'
+                  '</displayInfo>',
+                  '</app>']
+
+    # 3) Device Attestation Protocol endpoint
+    if variant.dap:
+        version = variant.ml_version or "1.0"
+        parts += ['<app>', f'<appID>{DAP_APP_ID}</appID>', '<name>Device Attestation</name>',
+                  '<remotingInfo><protocolID>DAP</protocolID>'
+                  f'<format>{_xml_escape(version)}</format></remotingInfo>',
+                  '<appInfo><appCategory>0xF0000001</appCategory></appInfo>',
+                  '</app>']
+
+    parts.append('</appList>')
     return "".join(parts)
 
 
@@ -234,12 +270,14 @@ class ServerContext:
     http_port: int
     vnc_port: int
     app_name: str
+    home_app_name: str = "MirrorLink Pi"
+    dap_port: int = 5510
     profile_store: ProfileStore = field(default_factory=ProfileStore)
     app_status: AppStatusStore = field(default_factory=AppStatusStore)
     subscription_store: eventing.SubscriptionStore = field(
         default_factory=eventing.SubscriptionStore)
     session: Session | None = None
-    # Returns the variant for the current attempt; default = baseline.
+    # Returns the variant for the current attempt; default = spec defaults.
     variant: Callable[[], Variant] = Variant
     # Called with a step name when the attempt progresses (e.g. "launch").
     progress: Callable[[str], None] = lambda step: None
@@ -384,46 +422,63 @@ def _handle_get_application_list(req: SoapRequest, ctx: ServerContext) -> SoapRe
     return SoapResponse(args=[("AppListing", render_app_listing(ctx, ctx.variant()))])
 
 
-def _handle_launch_application(req: SoapRequest, ctx: ServerContext) -> SoapResponse:
-    raw = req.args.get("AppID", "")
+def _known_app(raw: str, ctx: ServerContext) -> int:
+    """Validate an AppID against the current app list (810 malformed, 811 unknown)."""
     parsed = _parse_app_id(raw)
     if parsed is None:
         raise SoapFault(810, f"Bad AppID {raw!r}")
-    if parsed != VNC_APP_ID_INT:
+    listed = {int(a, 16) for a in advertised_app_ids(ctx.variant())}
+    if parsed not in listed:
         raise SoapFault(811, f"Unauthorized AppID {raw!r}")
-    if ctx.session:
-        ctx.session.reach(STAGE_LAUNCH, app_id=raw)
-    ctx.progress("launch")
-    # Per §4.5.3.1 a launched UI app shall have the UI before the response. Our VNC
-    # server runs continuously, so it already has it — flip the tracked status.
-    ctx.app_status.set(parsed, "Foreground")
+    return parsed
+
+
+def _handle_launch_application(req: SoapRequest, ctx: ServerContext) -> SoapResponse:
+    raw = req.args.get("AppID", "")
+    parsed = _known_app(raw, ctx)
+    variant = ctx.variant()
+    if parsed == DAP_APP_ID_INT:
+        # Part 4 §4.1.1.2: the DAP server listens at the returned URL.
+        ctx.progress("dap_launch")
+        if ctx.session:
+            ctx.session.event("dap_launch", app_id=raw)
+        ctx.app_status.set(parsed, "Foreground")
+        changed = [DAP_APP_ID]
+        app_uri = f"DAP://{ctx.address}:{ctx.dap_port}"
+    else:
+        if ctx.session:
+            ctx.session.reach(STAGE_LAUNCH, app_id=raw)
+        ctx.progress("launch")
+        # §4.5.3.1: a launched UI app has the UI before the response. Our VNC server
+        # runs continuously; when a UI app is launched the stand-alone VNC server's
+        # status is reported too (Part 9 §4.5.3.1: "foreground or background").
+        ctx.app_status.set(parsed, "Foreground")
+        changed = [raw_id for raw_id in advertised_app_ids(variant)
+                   if int(raw_id, 16) == parsed]
+        if parsed == HOME_APP_ID_INT:
+            ctx.app_status.set(VNC_APP_ID_INT, "Foreground")
+            changed.append(VNC_APP_ID)
+        app_uri = f"{variant.uri_scheme}://{ctx.address}:{ctx.vnc_port}"
     # Part 9: AppStatusUpdate fires after the LaunchApplication response has been
     # sent (eventing delays the NOTIFY slightly for that).
     eventing.fire_event(
-        ctx.subscription_store,
-        _TM_APP_EVT_PATH,
-        [("AppStatusUpdate", render_app_status_value([VNC_APP_ID]))],
-        session=ctx.session,
+        ctx.subscription_store, _TM_APP_EVT_PATH,
+        [("AppStatusUpdate", render_app_status_value(changed))], session=ctx.session,
     )
-    scheme = ctx.variant().uri_scheme
-    app_uri = f"{scheme}://{ctx.address}:{ctx.vnc_port}"
     return SoapResponse(args=[("AppURI", app_uri)])
 
 
 def _handle_terminate_application(req: SoapRequest, ctx: ServerContext) -> SoapResponse:
     raw = req.args.get("AppID", "")
-    parsed = _parse_app_id(raw)
-    if parsed is None:
-        raise SoapFault(810, f"Bad AppID {raw!r}")
-    if parsed != VNC_APP_ID_INT:
-        raise SoapFault(811, f"Unauthorized AppID {raw!r}")
+    parsed = _known_app(raw, ctx)
     ctx.progress("terminate")
+    if ctx.session:
+        ctx.session.event("terminate", app_id=raw)
     # Per §4.5.4: idempotent.
     ctx.app_status.set(parsed, "Notrunning")
     eventing.fire_event(
-        ctx.subscription_store,
-        _TM_APP_EVT_PATH,
-        [("AppStatusUpdate", render_app_status_value([VNC_APP_ID]))],
+        ctx.subscription_store, _TM_APP_EVT_PATH,
+        [("AppStatusUpdate", render_app_status_value([f"0x{parsed:08x}"]))],
         session=ctx.session,
     )
     return SoapResponse(args=[("TerminationResult", "true")])
@@ -431,8 +486,8 @@ def _handle_terminate_application(req: SoapRequest, ctx: ServerContext) -> SoapR
 
 def _handle_get_application_status(req: SoapRequest, ctx: ServerContext) -> SoapResponse:
     raw = req.args.get("AppID", VNC_APP_ID)
-    if raw == "*":
-        targets = [(VNC_APP_ID_INT, VNC_APP_ID)]
+    if raw.strip() in ("*", ""):
+        targets = [(int(a, 16), a) for a in advertised_app_ids(ctx.variant())]
     else:
         parsed = _parse_app_id(raw)
         if parsed is None:

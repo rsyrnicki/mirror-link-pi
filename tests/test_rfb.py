@@ -111,14 +111,27 @@ def test_mirrorlink_extension_and_unknown_messages_are_recorded(server):
         _server_init(sock)
         # SetEncodings incl. a guessed MirrorLink pseudo-encoding, then an ML message.
         sock.sendall(struct.pack("!BxH2i", 2, 2, 0, -523))
-        sock.sendall(struct.pack("!BBH", 128, 3, 4) + b"\xde\xad\xbe\xef")
-        sock.sendall(b"\xfa" + b"garbage")                   # unknown type 250
+        # -523 → ServerDisplayConfiguration (ext 1, 12 bytes) + ServerEventConfiguration
+        # (ext 3, 28 bytes), exactly as laid out in Part 2 Tables 7 and 11.
+        head = _recv(sock, 4)
+        assert head == bytes([128, 1, 0, 12])
+        major, minor, _fb, rel_w, rel_h, pixfmt = struct.unpack("!BBHHHI", _recv(sock, 12))
+        assert (major, minor, rel_w, rel_h, pixfmt) == (1, 0, 1, 1, 0x00010001)
+        assert _recv(sock, 4) == bytes([128, 3, 0, 28])
+        _recv(sock, 28)
+        # Unknown extension type 99: read and ignored, connection stays up (§7.1).
+        sock.sendall(struct.pack("!BBH", 128, 99, 4) + b"\xde\xad\xbe\xef")
+        # A blocking notification is decoded.
+        sock.sendall(struct.pack("!BBH", 128, 16, 14) + struct.pack("!HHHHIH", 0, 0, 64, 32, 1, 8))
+        sock.sendall(b"\xfa" + b"garbage")                   # unknown RFB type 250
         sock.settimeout(6)
         assert sock.recv(10) == b""                           # server closes after dump
     time.sleep(0.3)
     events = _events(session)
     ml = [e for e in events if e["kind"] == "vnc_mirrorlink_msg"]
-    assert ml and ml[0]["ext_type"] == 3 and ml[0]["payload_hex"] == "deadbeef"
+    assert ml[0]["ext_type"] == 99 and ml[0]["payload_hex"] == "deadbeef"
+    assert ml[1]["name"] == "FramebufferBlockingNotification"
+    assert ml[1]["decoded"]["reasons"] == ["application trust level / certification"]
     enc = [e for e in events if e["kind"] == "vnc_set_encodings"]
     assert enc[0]["encodings"] == [0, -523]
     assert any(e["kind"] == "vnc_unknown_msg" and e["msg_type"] == 250 for e in events)

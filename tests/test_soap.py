@@ -78,26 +78,49 @@ def test_dispatch_get_max_num_profiles():
     assert resp.args == [("NumProfilesAllowed", "1")]
 
 
-def test_app_listing_baseline_matches_session3_shape():
+def test_default_app_listing_follows_part9():
+    """Part 9 §5.2.1: stand-alone VNC server = protocolID VNC + appCategory 0xF0000001."""
     req = soap.parse_soap(REAL_GET_APP_LIST, APP_LIST_ACTION)
     body = soap.render_response(req, soap.dispatch(req, _ctx())).decode()
     assert "<u:GetApplicationListResponse" in body
     listing = soap.render_app_listing(_ctx(), Variant())
-    for part in ("<protocolID>VNC</protocolID>", "<trustLevel>0x0080</trustLevel>",
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(listing.split("?>", 1)[1])
+    ns = {"a": soap.APPLIST_NS}
+    apps = root.findall("a:app", ns)
+    assert len(apps) == 1
+    assert apps[0].find("a:remotingInfo/a:protocolID", ns).text == "VNC"
+    assert apps[0].find("a:appInfo/a:appCategory", ns).text == "0xF0000001"
+    for absent in ("trustLevel", "audioInfo", "appCertificateURL"):
+        assert absent not in listing
+
+
+def test_legacy_variant_reproduces_session3_listing():
+    v = Variant(name="legacy", app_category="0x00000000", app_trust_level="0x0080",
+                audio_info=True, audio_trust_level="0x0080", cert_url=True)
+    listing = soap.render_app_listing(_ctx(v), v)
+    for part in ("<appCategory>0x00000000", "<trustLevel>0x0080</trustLevel>",
                  "<audioInfo>", "<appCertificateURL>", "<resourceStatus>free"):
         assert part in listing
-    import xml.etree.ElementTree as ET
-    ET.fromstring(listing.split("?>", 1)[1])  # well-formed
 
 
-def test_app_listing_minimal_variant_drops_optional_claims():
-    v = Variant(name="minimal", audio_info=False, app_trust_level="", audio_trust_level="",
-                cert_url=False, display_content_category="0x00000000")
+def test_display_info_variant():
+    v = Variant(display_content_category="0x00000000")
     listing = soap.render_app_listing(_ctx(v), v)
-    assert "trustLevel" not in listing
-    assert "audioInfo" not in listing
-    assert "appCertificateURL" not in listing
     assert "<displayInfo><contentCategory>0x00000000</contentCategory></displayInfo>" in listing
+
+
+def test_dap_and_home_entries():
+    v = Variant(ml_version="1.1", dap=True, home_app=True, applist_namespace=False)
+    listing = soap.render_app_listing(_ctx(v), v)
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(listing.split("?>", 1)[1])
+    assert root.tag == "appList"                      # no namespace this time
+    by_proto = {a.findtext("remotingInfo/protocolID"): a for a in root.findall("app")}
+    assert by_proto["DAP"].findtext("remotingInfo/format") == "1.1"
+    assert by_proto["DAP"].findtext("appInfo/appCategory") == "0xF0000001"
+    homes = [a for a in root.findall("app") if a.findtext("appInfo/appCategory") == "0x00010001"]
+    assert len(homes) == 1
 
 
 def test_launch_sets_foreground_and_uses_variant_scheme():
@@ -110,6 +133,23 @@ def test_launch_sets_foreground_and_uses_variant_scheme():
     assert "Foreground" in status.args[0][1]
     listing = soap.render_app_listing(ctx, v)
     assert "<resourceStatus>busy" in listing
+
+
+def test_launch_home_app_and_dap():
+    v = Variant(dap=True, home_app=True, ml_version="1.1")
+    ctx = _ctx(v)
+    home = soap.dispatch(_app("LaunchApplication", AppID="0x00000002", ProfileID="0"), ctx)
+    assert home.args == [("AppURI", "VNC://192.168.7.2:5900")]
+    dap = soap.dispatch(_app("LaunchApplication", AppID="0x3", ProfileID="0"), ctx)
+    assert dap.args == [("AppURI", "DAP://192.168.7.2:5510")]
+    everything = soap.dispatch(_app("GetApplicationStatus", AppID="*"), ctx).args[0][1]
+    assert everything.count("Foreground") == 3
+
+
+def test_unlisted_app_is_unauthorized():
+    with pytest.raises(soap.SoapFault) as exc:
+        soap.dispatch(_app("LaunchApplication", AppID="0x00000003"), _ctx())  # no DAP listed
+    assert exc.value.code == 811
 
 
 def test_launch_rejects_bad_and_unknown_app_ids():

@@ -18,8 +18,10 @@ PYTHONPATH=src python3 -m pytest
 | `test_canvas.py` | font, pixel formats (RGB565, 32 bpp BE, colour map), dirty tracking |
 | `test_variants.py` | rotation per attempt, locking/persisting the winner, simulator never locks |
 | `test_session.py` | boot counter, sticky stages, summary |
+| `test_mirrorlink.py` | MirrorLink VNC message layouts (Part 2 tables), DAP stub |
+| `test_gadget.py` | FunctionFS descriptor/strings blobs, USB command parsing, ACK/STALL |
 | `test_rfb.py` | RFB 3.3/3.7 clients, colour-map clients, MirrorLink extension + unknown messages recorded |
-| `test_end_to_end.py` | real HTTP + VNC servers on localhost driven by the car simulator |
+| `test_end_to_end.py` | real HTTP + VNC servers on localhost driven by the car simulator (full MirrorLink VNC handshake, context info, device status, ByeBye) |
 
 ## Pre-flight on real hardware (home)
 

@@ -22,6 +22,7 @@ from . import __version__, gadget, netinfo
 from . import config as config_mod
 from .canvas import Canvas
 from .config import Config, as_dict, resolve_log_file
+from .dap import DapServer
 from .dhcp import DhcpServer
 from .http_descriptor import DescriptorServer
 from .led import StatusLed
@@ -89,12 +90,14 @@ class LinkMonitor:
     """Watches the USB carrier, and re-plugs the gadget when the car has gone quiet."""
 
     def __init__(self, cfg: Config, session: Session, ssdp: SsdpResponder,
-                 rfb: RfbServer | None) -> None:
+                 rfb: RfbServer | None,
+                 on_interface_recreated: Callable[[], None] = lambda: None) -> None:
         self.cfg = cfg
         self.session = session
         self.ssdp = ssdp
         self.rfb = rfb
         self.reconnects = 0
+        self.on_interface_recreated = on_interface_recreated
         self._stop = threading.Event()
 
     def run(self) -> None:
@@ -102,7 +105,19 @@ class LinkMonitor:
         last: bool | None = None
         link_since = time.monotonic()
         idle = self.cfg.watchdog.idle_reconnect_seconds
+        ifindex = gadget._ifindex(ifname)
         while not self._stop.wait(0.5):
+            # If the gadget was rebuilt, usb0 is a new device: sockets bound to the old
+            # one (DHCP uses SO_BINDTODEVICE) are deaf. Restart the whole service.
+            current = gadget._ifindex(ifname)
+            if ifindex > 0 and current > 0 and current != ifindex:
+                self.session.event("usb_interface_recreated", old=ifindex, new=current)
+                log.warning("%s was recreated (ifindex %d → %d): restarting", ifname,
+                            ifindex, current)
+                self.on_interface_recreated()
+                return
+            if ifindex <= 0:
+                ifindex = current
             up = gadget.carrier(ifname)
             if up != last:
                 self.session.event("usb_link", up=up, udc_state=gadget.udc_state())
@@ -129,8 +144,18 @@ class LinkMonitor:
         self._stop.set()
 
 
+def context_info(variant: Variant) -> tuple[int, int, int, int]:
+    """(appID, trust level, application category, content category) for VNC context
+    information (Part 2 §8.3). The foreground app is the home screen when listed,
+    else the stand-alone VNC server itself."""
+    from .soap import HOME_APP_ID_INT, VNC_APP_ID_INT
+    app_id = HOME_APP_ID_INT if variant.home_app else VNC_APP_ID_INT
+    return (app_id, int(variant.context_trust_level, 16),
+            int(variant.context_app_category, 16), 0)
+
+
 def _variant_manager(cfg: Config, variants_file: Path, session: Session) -> VariantManager:
-    """Build the VariantManager; a broken variants file or setting falls back to baseline."""
+    """Build the VariantManager; a broken variants file falls back to the spec default."""
     try:
         return VariantManager(
             load_variants(variants_file),
@@ -141,10 +166,10 @@ def _variant_manager(cfg: Config, variants_file: Path, session: Session) -> Vari
             state_dir=Path(cfg.session.root),
         )
     except Exception as exc:  # noqa: BLE001 - never lose a car trip to a typo
-        message = f"variants unusable ({exc!r}); running baseline only"
+        message = f"variants unusable ({exc!r}); running the spec-1.0 default only"
         log.error(message)
         session.note("CONFIG WARNING", message)
-        return VariantManager([Variant()], mode="fixed", fixed_variant="baseline",
+        return VariantManager([Variant()], mode="fixed", fixed_variant=Variant().name,
                               session=session)
 
 
@@ -212,10 +237,22 @@ def run(cfg: Config) -> int:
             bind_address=address, port=cfg.network.vnc_port, canvas=canvas,
             name=cfg.vnc.name, session=session,
             on_connect=lambda peer: variants.vnc_connected(),
-            screen=screen, dump_dir=session.directory, dump_limit=cfg.vnc.raw_dump_limit)
+            screen=screen, dump_dir=session.directory, dump_limit=cfg.vnc.raw_dump_limit,
+            ml_version=lambda: variants.current.ml_version or "1.0",
+            context_info=lambda: context_info(variants.current))
         guarded("rfb", rfb.serve_forever, stop, session)
 
-    link = LinkMonitor(cfg, session, ssdp, rfb)
+    dap = DapServer(bind_address=address, port=cfg.network.dap_port, session=session)
+    guarded("dap", dap.serve_forever, stop, session)
+
+    exit_code = 0
+
+    def restart_service() -> None:
+        nonlocal exit_code
+        exit_code = 75   # non-zero: systemd (Restart=always) starts us again
+        stop.set()
+
+    link = LinkMonitor(cfg, session, ssdp, rfb, on_interface_recreated=restart_service)
     guarded("link", link.run, stop, session)
 
     def handle_signal(signum, _frame):
@@ -230,10 +267,10 @@ def run(cfg: Config) -> int:
     try:
         stop.wait()
     finally:
-        for component in (link, dhcp, rfb, ssdp, screen, led):
+        for component in (link, dhcp, rfb, dap, ssdp, screen, led):
             if component is not None:
                 component.stop()
         http_server.shutdown()
-        session.event("stopped")
+        session.event("stopped", exit_code=exit_code)
         session.close()
-    return 0
+    return exit_code

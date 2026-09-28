@@ -32,8 +32,8 @@ def _attempt(mgr, clock, *, ua="QNX/6.5.0", launch=True):
 
 def test_shipped_variants_file_loads():
     loaded = vm.load_variants()
-    assert loaded[0].name == "baseline"
-    assert loaded[0] == vm.Variant(name="baseline", description=loaded[0].description)
+    assert loaded[0].name == "spec-1.0"
+    assert loaded[0] == vm.Variant(name="spec-1.0", description=loaded[0].description)
     assert len({v.name for v in loaded}) == len(loaded)
 
 

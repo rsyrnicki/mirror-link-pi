@@ -35,7 +35,7 @@ Pre-flight boots are recorded as sessions too. Simulator traffic is marked
    a lot: they let us line up what the screen showed with the logs).
 4. Wait. The Pi boots in ~20–30 s. The car then retries the connection by itself every
    ~10 s; each retry uses the next variant from `config/variants.toml`. One full
-   round of the 8 variants takes about 1.5 minutes. **Stay at least 5 minutes.**
+   round of the 6 variants takes about a minute. **Stay at least 5 minutes.**
 5. If the head unit shows a MirrorLink menu or app list, tap our entry
    ("MirrorLink Pi Display") and note what happens.
 6. Read the LED (it shows the best result of this boot):
@@ -74,6 +74,7 @@ every HTTP error we returned and all VNC activity. The raw material is next to i
 | `sessions/NNNN/usb0.pcap` | every packet on the USB link — open in Wireshark |
 | `sessions/NNNN/journal.txt` | the whole boot log incl. kernel USB messages |
 | `sessions/NNNN/vnc-N-rx.bin` | raw bytes the car sent on VNC connection N |
+| `sessions/NNNN/usb.jsonl` | USB level: MirrorLink USB command (the car's ML version!), UDC states, fallbacks |
 | `sessions/NNNN/summary.txt` | furthest stage, winning variant, notes |
 
 If a variant won, `winner-variant` holds its name and the next boot starts with it.

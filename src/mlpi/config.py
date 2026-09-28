@@ -26,6 +26,8 @@ class NetworkConfig:
     http_port: int = 8080
     # Our own RFB server (mlpi.rfb) listens here; LaunchApplication hands it out.
     vnc_port: int = 5900
+    # Device Attestation Protocol stub (only advertised by variants with dap = true).
+    dap_port: int = 5510
 
 
 @dataclass
@@ -40,6 +42,9 @@ class UsbConfig:
     host_mac: str = "02:1a:11:00:00:01"  # MAC of the car-side network interface
     dev_mac: str = "02:1a:11:00:00:02"   # MAC of usb0 on the Pi
     address: str = "192.168.7.2/24"      # static IPv4 of usb0
+    # Answer the MirrorLink USB command (Part 1 §4.2.2) via a FunctionFS interface
+    # instead of STALLing it. Falls back to NCM-only automatically if it fails.
+    ml_command: bool = True
 
 
 @dataclass
@@ -88,7 +93,7 @@ class ExperimentConfig:
     #           car, until one of them makes the car open the VNC connection.
     # "fixed":  always use `fixed_variant`.
     mode: str = "rotate"
-    fixed_variant: str = "baseline"
+    fixed_variant: str = "spec-1.0"
     # Empty = config/variants.toml shipped in the repo.
     variants_file: str = ""
     # Seconds of silence from the car after which the next request counts as a new attempt.

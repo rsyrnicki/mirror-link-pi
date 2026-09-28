@@ -54,10 +54,20 @@ def test_variant_adds_mirrorlink_version():
     from mlpi.variants import Variant
     xml = http_descriptor.render_descriptor(Config(), "192.168.7.2",
                                             variant=Variant(ml_version="1.1"))
-    assert ("<X_mirrorLinkVersion><majorVersion>1</majorVersion>"
-            "<minorVersion>1</minorVersion></X_mirrorLinkVersion>") in xml
     import xml.etree.ElementTree as ET
-    ET.fromstring(xml)
+    root = ET.fromstring(xml)
+    # Part 12 §5: the element is in the CCC ml-1-1 namespace, not the UPnP one.
+    ns = {"u": "urn:schemas-upnp-org:device-1-0", "ml": "urn:schemas-carconnectivity-org:ml-1-1"}
+    version = root.find("u:device/ml:X_mirrorLinkVersion", ns)
+    assert version is not None
+    assert version.find("ml:majorVersion", ns).text == "1"
+    assert version.find("ml:minorVersion", ns).text == "1"
+
+
+def test_service_ids_follow_spec_example():
+    xml = http_descriptor.render_descriptor(Config(), "192.168.7.2")
+    assert "urn:upnp-org:serviceId:TmApplicationServer1" in xml
+    assert "urn:upnp-org:serviceId:TmClientProfile1" in xml
 
 
 def test_all_referenced_scpds_exist():

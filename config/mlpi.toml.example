@@ -12,7 +12,7 @@
 #           attempt of the car, until one makes it open the VNC connection.
 # "fixed":  always use fixed_variant.
 mode = "rotate"
-fixed_variant = "baseline"
+fixed_variant = "spec-1.0"
 
 [usb]
 # Some head units only talk to whitelisted USB vendors (Samsung 0x04e8, HTC 0x0bb4,

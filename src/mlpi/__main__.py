@@ -2,7 +2,8 @@
 
 On the Pi (started by systemd, see systemd/):
   session-init   create this boot's session directory        (mlpi-session.service)
-  gadget-up      configure the USB gadget + usb0 address      (mlpi-gadget.service)
+  gadget-up      USB gadget + usb0 address, then stay running to answer the
+                 MirrorLink USB command and log USB events  (mlpi-gadget.service)
   capture        record usb0 into <session>/usb0.pcap         (mlpi-capture.service)
   run            the MirrorLink server itself                 (mlpi.service)
 
@@ -71,16 +72,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "gadget-up":
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-        import json
-
         from . import gadget, session
-        facts = gadget.gadget_up(cfg.usb)
         directory = session.current_session_dir()
-        if directory is not None and directory.is_dir():
-            (directory / "gadget.json").write_text(json.dumps(facts, indent=2) + "\n")
-        if facts["ifname"] != cfg.network.interface:
-            logging.warning("gadget interface is %s but network.interface is %s",
-                            facts["ifname"], cfg.network.interface)
+        gadget.run_daemon(cfg.usb, directory if directory and directory.is_dir() else None)
         return 0
 
     if args.cmd == "capture":
@@ -105,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         from .canvas import Canvas
         from .screen import StatusScreen
         canvas = Canvas(cfg.vnc.width, cfg.vnc.height)
-        screen = StatusScreen(canvas, variant_name=lambda: "baseline")
+        screen = StatusScreen(canvas, variant_name=lambda: "spec-1.0")
         screen.refresh()
         Path(args.output).write_bytes(canvas.to_png())
         print(args.output)

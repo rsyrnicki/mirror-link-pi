@@ -143,6 +143,41 @@ def summarise(directory: Path) -> str:
             data = d.read_bytes()
             out.append(f"  {d.name}: {len(data)} bytes, first 64: {data[:64].hex()}")
 
+    # USB level (written by the gadget daemon into usb.jsonl)
+    usb_path = directory / "usb.jsonl"
+    if usb_path.is_file():
+        usb = []
+        for line in usb_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                usb.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        out.append("")
+        up = next((e for e in usb if e.get("kind") == "gadget_up"), {})
+        out.append(f"USB gadget: ml_command={up.get('ml_command')}, "
+                   f"VID:PID {up.get('vid')}:{up.get('pid')}")
+        cmds = [e for e in usb if e.get("kind") == "ml_usb_command"]
+        if cmds:
+            first = cmds[0]
+            out.append(f"  MirrorLink USB command received {len(cmds)}×: car speaks "
+                       f"MirrorLink {first.get('ml_version')}, host VID {first.get('host_vid')}")
+        else:
+            out.append("  no MirrorLink USB command received")
+        states = [e.get("state") for e in usb if e.get("kind") == "udc_state"]
+        out.append(f"  UDC states: {' > '.join(states[:20])}")
+        for e in usb:
+            if e.get("kind") in ("ffs_fallback", "ffs_setup_stalled", "ffs_read_error"):
+                detail = {k: v for k, v in e.items() if k not in ("wall", "kind")}
+                out.append(f"  {e['kind']}: {detail}")
+
+    dap = [e for e in events if str(e.get("kind", "")).startswith("dap_")]
+    if dap:
+        out.append("")
+        out.append("DAP (device attestation):")
+        for e in dap[:20]:
+            detail = {k: v for k, v in e.items() if k not in ("t", "wall", "kind", "xml")}
+            out.append(f"  t={e['t']} {e['kind']} {detail}")
+
     profile = [e for e in events if e.get("kind") == "client_profile"]
     if profile:
         model = re.search(r"<modelName>([^<]*)", profile[-1].get("xml", ""))

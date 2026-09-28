@@ -49,8 +49,10 @@ def render_descriptor(cfg: Config, address: str, *, template_path: Path = DEFAUL
     extra = ""
     if variant.ml_version:
         major, _, minor = variant.ml_version.partition(".")
+        # Part 12 §5: the element lives in the CCC ml-1-1 namespace. Without it a
+        # namespace-aware client does not see our version claim at all.
         extra = (
-            "<X_mirrorLinkVersion>"
+            '<X_mirrorLinkVersion xmlns="urn:schemas-carconnectivity-org:ml-1-1">'
             f"<majorVersion>{_xml_escape(major)}</majorVersion>"
             f"<minorVersion>{_xml_escape(minor or '0')}</minorVersion>"
             "</X_mirrorLinkVersion>"
@@ -101,7 +103,9 @@ class DescriptorServer(ThreadingHTTPServer):
             address=address,
             http_port=cfg.network.http_port,
             vnc_port=cfg.network.vnc_port,
-            app_name=cfg.device.friendly_name + " Display",
+            app_name=cfg.device.friendly_name + " VNC Server",
+            home_app_name=cfg.device.friendly_name,
+            dap_port=cfg.network.dap_port,
             session=session,
             variant=(lambda: variants.current) if variants else Variant,
             progress=variants.progress if variants else (lambda step: None),
@@ -288,9 +292,11 @@ class DescriptorHandler(BaseHTTPRequestHandler):
         # §4.2.2/§4.2.3 AppListUpdate/AppStatusUpdate are comma-separated AppID
         # lists; the first issuance lists every appID in the current AppList.
         if service_path == "/evt/TmApplicationServer":
+            ids = soap.render_app_status_value(
+                soap.advertised_app_ids(self.server.current_variant()))
             eventing.fire_event(
                 store, service_path,
-                [("AppListUpdate", soap.VNC_APP_ID), ("AppStatusUpdate", soap.VNC_APP_ID)],
+                [("AppListUpdate", ids), ("AppStatusUpdate", ids)],
                 delay=0.1, session=self.server.session,
             )
 
