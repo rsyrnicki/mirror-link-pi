@@ -19,6 +19,9 @@
 #   home_app                  also list a VNC "home screen" UI app (category 0x00010001)
 #   dap                       also list a DAP endpoint (answers "attestation not
 #                             available" — we have no CCC certificate)
+#   rtp_apps                  also list RTP audio server+client entries for payloads
+#                             98/99, shaped like a Galaxy S6's (no audio streamed yet)
+#   allowed_profile_ids       <allowedProfileIDs>0</allowedProfileIDs> in each entry (S6)
 #   uri_scheme                scheme of the AppURI returned by LaunchApplication
 #   context_app_category      VNC context information: application category
 #   context_trust_level       VNC context information: trust level
@@ -28,8 +31,42 @@
 # sessions it DID launch with the fuller legacy entry. So variants with a launchable
 # UI app / legacy entry go first; spec-1.0 is kept as a reference.
 #
+# Galaxy S6 probe (2026-09-28): a certified phone lists RTP audio server/client
+# entries for payloads 98/99 — exactly what the MIB2's client profile announces — and
+# we listed none. The s6-* variants add them, so they go first.
+#
 # The MIB2 loops the handshake every ~2.7 s; each variant gets `cycles_per_variant`
-# (default 2) cycles, so 7 variants ≈ 40 s per full round.
+# (default 2) cycles, so 10 variants ≈ 55 s per full round.
+
+[[variant]]
+name = "s6-audio-home"
+description = "spec-1.0-home plus RTP audio entries and allowedProfileIDs, app list shaped like a Galaxy S6's."
+home_app = true
+rtp_apps = true
+allowed_profile_ids = true
+applist_namespace = false
+app_trust_level = "0x80"
+
+[[variant]]
+name = "s6-audio-legacy"
+description = "legacy-session3 (what the car launched in May) plus S6-style RTP audio entries."
+app_category = "0x00000000"
+app_trust_level = "0x0080"
+audio_info = true
+audio_trust_level = "0x0080"
+cert_url = true
+uri_scheme = "vnc"
+rtp_apps = true
+allowed_profile_ids = true
+applist_namespace = false
+
+[[variant]]
+name = "s6-audio"
+description = "spec-1.0 stand-alone VNC server plus S6-style RTP audio entries."
+rtp_apps = true
+allowed_profile_ids = true
+applist_namespace = false
+app_trust_level = "0x80"
 
 [[variant]]
 name = "spec-1.0-home"

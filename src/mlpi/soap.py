@@ -44,6 +44,13 @@ VNC_APP_ID_INT = int(VNC_APP_ID, 16)
 HOME_APP_ID_INT = int(HOME_APP_ID, 16)
 DAP_APP_ID_INT = int(DAP_APP_ID, 16)
 
+# RTP audio endpoints (variant.rtp_apps), shaped like a Galaxy S6's app list: an RTP
+# server ("out", category 0xF0000001) and client ("in", 0xF0000002) per payload type
+# the car announced (98, 99). (app ID, payload, direction, port)
+RTP_APPS = [("0x00000005", 99, "out", 10500), ("0x00000006", 98, "out", 10500),
+            ("0x00000007", 99, "in", 10600), ("0x00000008", 98, "in", 10600)]
+RTP_APP_IDS_INT = {int(a, 16) for a, *_ in RTP_APPS}
+
 APPLIST_NS = "urn:schemas-upnp-org:tmapplicationserver:applist-1-0"
 
 
@@ -53,6 +60,8 @@ def advertised_app_ids(variant: Variant) -> list[str]:
         ids.append(HOME_APP_ID)
     if variant.dap:
         ids.append(DAP_APP_ID)
+    if variant.rtp_apps:
+        ids += [a for a, *_ in RTP_APPS]
     return ids
 
 
@@ -104,8 +113,9 @@ def render_app_listing(ctx: ServerContext, variant: Variant) -> str:
     parts = ['<?xml version="1.0" encoding="UTF-8"?>', f'<appList{ns}>']
 
     # 1) stand-alone VNC server
+    allowed = '<allowedProfileIDs>0</allowedProfileIDs>' if variant.allowed_profile_ids else ''
     parts += ['<app>', f'<appID>{VNC_APP_ID}</appID>',
-              f'<name>{_xml_escape(ctx.app_name)}</name>', icon,
+              f'<name>{_xml_escape(ctx.app_name)}</name>', icon, allowed,
               '<remotingInfo><protocolID>VNC</protocolID></remotingInfo>']
     if variant.cert_url:
         parts.append(f'<appCertificateURL>{_xml_escape(cert_url)}</appCertificateURL>')
@@ -136,7 +146,7 @@ def render_app_listing(ctx: ServerContext, variant: Variant) -> str:
     if variant.home_app:
         parts += ['<app>', f'<appID>{HOME_APP_ID}</appID>',
                   f'<name>{_xml_escape(ctx.home_app_name)}</name>',
-                  '<description>MirrorLink-Pi status screen</description>', icon,
+                  '<description>MirrorLink-Pi status screen</description>', icon, allowed,
                   '<remotingInfo><protocolID>VNC</protocolID></remotingInfo>',
                   '<appInfo><appCategory>0x00010001</appCategory>'
                   f'<trustLevel>{_xml_escape(variant.context_trust_level)}</trustLevel>'
@@ -146,7 +156,28 @@ def render_app_listing(ctx: ServerContext, variant: Variant) -> str:
                   '</displayInfo>',
                   '</app>']
 
-    # 3) Device Attestation Protocol endpoint
+    # 3) RTP audio endpoints (no audio is streamed yet: listing them is the experiment)
+    if variant.rtp_apps:
+        for app_id, payload, direction, _port in RTP_APPS:
+            server = direction == "out"
+            parts += ['<app>', f'<appID>{app_id}</appID>',
+                      f'<name>RTP {"Server" if server else "Client"} {payload}</name>',
+                      f'<description>RTP Audio {"Server" if server else "Client"}</description>',
+                      allowed,
+                      '<remotingInfo><protocolID>RTP</protocolID>'
+                      f'<format>{payload}</format><direction>{direction}</direction>'
+                      '<audioIPL>4800</audioIPL><audioMPL>9600</audioMPL></remotingInfo>',
+                      '<appInfo><appCategory>'
+                      f'{"0xF0000001" if server else "0xF0000002"}</appCategory>'
+                      '<trustLevel>0x80</trustLevel></appInfo>',
+                      '<audioInfo>'
+                      f'<audioType>{"application" if server else "phone"}</audioType>'
+                      f'<contentCategory>{"0x2" if server else "0x10"}</contentCategory>'
+                      '<contentRules>0x0</contentRules><trustLevel>0x80</trustLevel>'
+                      '</audioInfo>',
+                      '<resourceStatus>free</resourceStatus>', '</app>']
+
+    # 4) Device Attestation Protocol endpoint
     if variant.dap:
         version = variant.ml_version or "1.0"
         parts += ['<app>', f'<appID>{DAP_APP_ID}</appID>', '<name>Device Attestation</name>',
@@ -446,6 +477,14 @@ def _handle_launch_application(req: SoapRequest, ctx: ServerContext) -> SoapResp
         ctx.app_status.set(parsed, "Foreground")
         changed = [DAP_APP_ID]
         app_uri = f"DAP://{ctx.address}:{ctx.dap_port}"
+    elif parsed in RTP_APP_IDS_INT:
+        port = next(p for a, _pl, _d, p in RTP_APPS if int(a, 16) == parsed)
+        ctx.progress("rtp_launch")
+        if ctx.session:
+            ctx.session.event("rtp_launch", app_id=raw, port=port)
+        ctx.app_status.set(parsed, "Foreground")
+        changed = [f"0x{parsed:08x}"]
+        app_uri = f"RTP://{ctx.address}:{port}"
     else:
         if ctx.session:
             ctx.session.reach(STAGE_LAUNCH, app_id=raw)

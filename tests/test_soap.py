@@ -166,3 +166,21 @@ def test_unknown_action_raises_soap_fault():
     with pytest.raises(soap.SoapFault) as exc_info:
         soap.dispatch(req, _ctx())
     assert exc_info.value.code == 401
+
+
+def test_rtp_apps_are_listed_and_launchable_like_a_galaxy_s6():
+    from mlpi.variants import Variant
+    variant = Variant(rtp_apps=True, allowed_profile_ids=True, applist_namespace=False)
+    ctx = soap.ServerContext(address="192.168.7.2", http_port=8080, vnc_port=5900,
+                             app_name="x", variant=lambda: variant)
+    listing = soap.render_app_listing(ctx, variant)
+    assert "<appList>" in listing
+    assert listing.count("<protocolID>RTP</protocolID>") == 4
+    assert "<format>98</format><direction>out</direction>" in listing
+    assert "<appCategory>0xF0000002</appCategory>" in listing
+    assert listing.count("<allowedProfileIDs>0</allowedProfileIDs>") == 5
+    req = soap.SoapRequest("urn:schemas-upnp-org:service:TmApplicationServer:1",
+                           "LaunchApplication", {"AppID": "0x7", "ProfileID": "0"})
+    resp = soap._handle_launch_application(req, ctx)
+    assert resp.args == [("AppURI", "RTP://192.168.7.2:10600")]
+    assert ctx.app_status.get(7) == "Foreground"

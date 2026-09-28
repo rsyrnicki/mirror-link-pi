@@ -70,6 +70,11 @@ class Variant:
     # and a Device Attestation Protocol endpoint (Part 9 §5.2.5, Part 4).
     home_app: bool = False
     dap: bool = False
+    # RTP audio server + client entries for payloads 98/99, as a Galaxy S6 lists them
+    # (the MIB2's client profile announces exactly those payloads).
+    rtp_apps: bool = False
+    # <allowedProfileIDs>0</allowedProfileIDs> in every entry (the S6 does this).
+    allowed_profile_ids: bool = False
     # LaunchApplication AppURI: "<scheme>://<address>:<port>" (Part 9 Table 4-7).
     uri_scheme: str = "VNC"
     # VNC Context Information (Part 2 §8.3) sent with framebuffer updates.
