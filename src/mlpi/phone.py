@@ -39,6 +39,9 @@ log = logging.getLogger(__name__)
 
 SCRCPY_VERSION = "4.1"
 REMOTE_JAR = "/data/local/tmp/mlpi-scrcpy-server.jar"
+# The server deletes its own jar when it starts (cleanup=true), so the app-list query
+# needs its own copy.
+REMOTE_LIST_JAR = "/data/local/tmp/mlpi-scrcpy-list.jar"
 
 CODEC_H264 = 0x68323634
 
@@ -87,6 +90,15 @@ def display_power_message(on: bool) -> bytes:
     """With a virtual display, this powers the phone's *own* screen (scrcpy
     Controller.setDisplayPower); apps keep rendering on the virtual display."""
     return struct.pack("!BB", MSG_SET_DISPLAY_POWER, int(on))
+
+
+def fit_box(src_w: int, src_h: int, dst_w: int, dst_h: int) -> tuple[int, int, int, int]:
+    """Where a src_w×src_h picture goes inside dst_w×dst_h keeping its proportions:
+    (x, y, w, h). A portrait app on the landscape car screen gets black side bars."""
+    scale = min(dst_w / src_w, dst_h / src_h)
+    w = max(2, min(dst_w, round(src_w * scale)) // 2 * 2)
+    h = max(2, min(dst_h, round(src_h * scale)) // 2 * 2)
+    return (dst_w - w) // 2, (dst_h - h) // 2, w, h
 
 
 def start_app_message(name: str) -> bytes:
@@ -406,6 +418,26 @@ class PhoneDisconnected(Exception):
     pass
 
 
+def _compose(on_frame: Callable[[bytes], None], box: tuple[int, int, int, int],
+             full: tuple[int, int] | None = None):
+    """Wrap ``on_frame`` so pictures of size box[2]×box[3] are placed into the full
+    frame at box[0], box[1] (black around). Identity when the box is the full frame."""
+    bx, by, bw, bh = box
+    if bx == 0 and by == 0:
+        return on_frame
+
+    def composed(data: bytes) -> None:
+        fw = bw + 2 * bx if full is None else full[0]
+        fh = bh + 2 * by if full is None else full[1]
+        buf = bytearray(fw * fh * 2)
+        row = bw * 2
+        for y in range(bh):
+            o = ((by + y) * fw + bx) * 2
+            buf[o:o + row] = data[y * row:(y + 1) * row]
+        on_frame(bytes(buf))
+    return composed
+
+
 class PhoneLink:
     """Finds the phone, runs scrcpy and feeds the decoded video into ``frame``."""
 
@@ -425,6 +457,7 @@ class PhoneLink:
         self._control: socket.socket | None = None
         self._control_lock = threading.Lock()
         self._video_size = (frame.width, frame.height)
+        self._video_box = (0, 0, frame.width, frame.height)   # where the video sits
         self._down = False
         self._last_pos = (-1, -1)
         self._procs: list[subprocess.Popen] = []
@@ -473,11 +506,15 @@ class PhoneLink:
         """Ask the phone for its launchable apps (scrcpy's list_apps) for the
         launcher's "All apps" pages. Runs in the background once per connection."""
         from .launcher import parse_app_list
-        out = self.adb.run("shell", f"CLASSPATH={REMOTE_JAR}", "app_process", "/",
+        push = self.adb.run("push", self.cfg.server_jar, REMOTE_LIST_JAR, serial=serial,
+                            timeout=60)
+        out = self.adb.run("shell", f"CLASSPATH={REMOTE_LIST_JAR}", "app_process", "/",
                            "com.genymobile.scrcpy.Server", SCRCPY_VERSION, "list_apps=true",
                            "log_level=info", serial=serial, timeout=90)
         apps = parse_app_list(out.stdout)
-        self._event("phone_app_list", count=len(apps))
+        self._event("phone_app_list", count=len(apps), push_rc=push.returncode,
+                    rc=out.returncode, stderr=(out.stderr or "")[:500],
+                    stdout_head=(out.stdout or "")[:300])
         if apps and self.launcher:
             self.launcher.set_all_apps(apps)
 
@@ -530,9 +567,13 @@ class PhoneLink:
         if self._launcher_pointer(x, y, buttons):
             return
         vw, vh = self._video_size
-        fx = min(vw - 1, max(0, x * vw // self.frame.width))
-        fy = min(vh - 1, max(0, y * vh // self.frame.height))
+        bx, by, bw, bh = self._video_box
         pressed = bool(buttons & 1)
+        inside = bx <= x < bx + bw and by <= y < by + bh
+        if pressed and not self._down and not inside:
+            return                                   # a tap on the black side bars
+        fx = min(vw - 1, max(0, (x - bx) * vw // bw))
+        fy = min(vh - 1, max(0, (y - by) * vh // bh))
         if pressed and not self._down:
             action = ACTION_DOWN
         elif pressed:
@@ -705,12 +746,17 @@ class PhoneLink:
                     elif kind == "session":
                         _, w, h, _resized = ev
                         self._video_size = (w, h)
-                        self._event("phone_session", width=w, height=h)
+                        # The virtual display rotates with its content: a portrait-only
+                        # app turns it to e.g. 480x800. Keep the proportions.
+                        box = fit_box(w, h, self.frame.width, self.frame.height)
+                        self._video_box = box
+                        self._event("phone_session", width=w, height=h, box=list(box))
                         self._set_status(f"streaming {serial} {w}x{h}")
                         if decoder:
                             decoder.stop()
                         try:
-                            decoder = Decoder(self.frame.width, self.frame.height, on_frame,
+                            full = (self.frame.width, self.frame.height)
+                            decoder = Decoder(box[2], box[3], _compose(on_frame, box, full),
                                               codec=c.decoder, threads=c.decoder_threads)
                         except Exception as exc:  # noqa: BLE001 - e.g. libavcodec missing
                             raise PhoneDisconnected(f"decoder unavailable: {exc}") from None

@@ -144,3 +144,41 @@ def test_display_power_matches_scrcpy_test_vector():
     # test_serialize_set_display_power: {SC_CONTROL_MSG_TYPE_SET_DISPLAY_POWER, 1}
     assert ph.display_power_message(True) == bytes([10, 1])
     assert ph.display_power_message(False) == bytes([10, 0])
+
+
+def test_portrait_app_is_pillarboxed_and_touches_map_into_it():
+    assert ph.fit_box(800, 480, 800, 480) == (0, 0, 800, 480)
+    assert ph.fit_box(480, 800, 800, 480) == (256, 0, 288, 480)
+    got = []
+    compose = ph._compose(got.append, (2, 0, 2, 2), (6, 2))
+    compose(b"AABBCCDD")                         # 2x2 picture, 2 bytes per pixel
+    assert got == [b"\0\0\0\0AABB\0\0\0\0" + b"\0\0\0\0CCDD\0\0\0\0"]
+
+    sent = []
+    frame = types.SimpleNamespace(width=800, height=480)
+    link = ph.PhoneLink(types.SimpleNamespace(adb="adb", adb_home=""), frame, switch=None)
+    link._send = sent.append
+    link._video_size, link._video_box = (480, 800), (256, 0, 288, 480)
+    link.on_pointer(100, 240, 1)                 # on the black bar: ignored
+    assert sent == []
+    link.on_pointer(400, 240, 1)                 # middle of the picture
+    link.on_pointer(400, 240, 0)
+    assert [struct.unpack_from("!ii", m, 10) for m in sent] == [(240, 400), (240, 400)]
+
+
+def test_app_list_uses_its_own_jar_copy():
+    calls = []
+
+    class FakeAdb:
+        def run(self, *args, serial="", timeout=20.0):
+            calls.append(args)
+            out = (" - Spotify                        com.spotify.music\n"
+                   if args[0] == "shell" else "")
+            return types.SimpleNamespace(returncode=0, stdout=out, stderr="")
+
+    cfg = types.SimpleNamespace(adb="adb", adb_home="", server_jar="/opt/jar", launcher=False)
+    link = ph.PhoneLink(cfg, types.SimpleNamespace(width=800, height=480), switch=None,
+                        adb=FakeAdb())
+    link._load_app_list("s")
+    assert calls[0] == ("push", "/opt/jar", ph.REMOTE_LIST_JAR)
+    assert f"CLASSPATH={ph.REMOTE_LIST_JAR}" in calls[1]
