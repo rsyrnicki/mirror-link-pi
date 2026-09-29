@@ -91,8 +91,8 @@ def phone_preview(*, serial: str = "", port: int = 5900, screenshot: Path | None
         if not devices:
             # Paired phones announce their wireless-debugging port over mDNS.
             print("looking for the phone's Wireless debugging on this network …")
-            for host, port in discover_adb_tls("", "", timeout=4.0):
-                target = f"{host}:{port}"
+            for host, adb_port in discover_adb_tls("", "", timeout=4.0):
+                target = f"{host}:{adb_port}"
                 if adb.connect(target) and adb.state(target) == "device":
                     print(f"connected to {target}")
                     devices = [target]
