@@ -178,6 +178,9 @@ class DhcpServer:
 
     # ----- protocol -----
 
+    def leased_addresses(self) -> list[str]:
+        return list(self._leases.values())
+
     def lease_for(self, mac: str) -> str:
         ip = self._leases.get(mac)
         if ip is None:

@@ -69,6 +69,16 @@ phone), the car is the *MirrorLink Client*.
 Everything is pure Python standard library on stock Raspberry Pi OS Lite, so the SD
 card is prepared completely on the laptop and the Pi never needs internet.
 
+## Next: phone mode (scrcpy)
+
+Goal: navigation and Spotify on the car screen. The Pi mirrors an Android phone
+(tested target: Samsung A56, Android 16) over its own Wi-Fi hotspot with
+[scrcpy](https://github.com/Genymobile/scrcpy): the phone renders an 800×480 virtual
+display, the Pi decodes it and sends it to the car through the MirrorLink session above,
+and car touches go back to the phone. Audio stays on the phone's Bluetooth link to the
+car. Set up with `mlpi pair-phone` and `prepare-sd.sh --phone`, then try it at the desk
+with `mlpi phone-preview`. See [`docs/phone-mode.md`](docs/phone-mode.md).
+
 ## Quick start
 
 ```bash
@@ -86,18 +96,19 @@ Details: [`docs/pi-deployment.md`](docs/pi-deployment.md) (SD card),
 [`docs/laptop-dev.md`](docs/laptop-dev.md) (development),
 [`docs/spec-notes.md`](docs/spec-notes.md) (the MirrorLink spec, clause by clause),
 [`docs/probe-phone.md`](docs/probe-phone.md) (measuring a real MirrorLink phone),
+[`docs/phone-mode.md`](docs/phone-mode.md) (mirroring an Android phone),
 [`docs/known-gaps.md`](docs/known-gaps.md) (what we know we don't know).
 
 ## Repo layout
 
 | Path | What |
 |---|---|
-| `src/mlpi/` | the server: `dhcp`, `ssdp`, `http_descriptor` + `soap` + `eventing`, `rfb` + `mirrorlink_vnc` + `canvas` + `screen`, `dap`, `variants`, `session`, `capture`, `gadget`, `led`, `runner` |
-| `src/mlpi/tools/` | `simulate_car` (recorded VW handshake + VNC client), `probe_phone` (drive a real phone), `report`, `discover` |
+| `src/mlpi/` | the server: `dhcp`, `ssdp`, `http_descriptor` + `soap` + `eventing`, `rfb` + `mirrorlink_vnc` + `canvas` + `screen`, `dap`, `variants`, `session`, `capture`, `gadget`, `led`, `runner`; phone mode: `phone` (scrcpy client), `avdecode` (H.264 via libavcodec), `video` (frames + source switch) |
+| `src/mlpi/tools/` | `simulate_car` (recorded VW handshake + VNC client), `probe_phone` (drive a real phone), `phone_tools` (`pair-phone`, `phone-preview`), `report`, `discover` |
 | `config/` | device descriptor template, SCPDs, `variants.toml`, `mlpi.toml.example` |
 | `systemd/` | units started at boot on the Pi |
-| `scripts/` | `prepare-sd.sh`, `collect-logs.sh`, `fetch-spec.sh` (laptop); `probe-sai-*` (VW SAI research) |
-| `captures/` | car captures from earlier sessions, CCC reference material |
+| `scripts/` | `prepare-sd.sh`, `collect-logs.sh`, `fetch-spec.sh`, `fetch-scrcpy-server.sh` (laptop); `probe-sai-*` (VW SAI research) |
+| `captures/` | car captures from earlier sessions (vehicle identifiers scrubbed) |
 | `legacy/` | Robert's original files, kept for git-blame lineage |
 
 ## License

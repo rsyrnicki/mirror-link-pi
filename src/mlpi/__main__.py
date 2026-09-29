@@ -15,6 +15,10 @@ On the laptop:
   report         summarise a session directory brought back from the car
   screenshot     render the status screen to a PNG without any network
   discover       send M-SEARCH and dump replies (debugging)
+  pair-phone     pair an Android phone for phone mode (Wireless debugging), with the
+                 adb key that prepare-sd.sh --phone puts on the SD card
+  phone-preview  mirror the phone into a local VNC server, to try phone mode at the
+                 desk with any VNC viewer (docs/phone-mode.md)
 """
 
 from __future__ import annotations
@@ -69,6 +73,18 @@ def main(argv: list[str] | None = None) -> int:
     p_disc.add_argument("--interface", "-i", help="bind to this interface (overrides config)")
     p_disc.add_argument("--timeout", "-t", type=float, default=4.0)
     p_disc.add_argument("--verbose", "-v", action="store_true")
+
+    p_pair = sub.add_parser("pair-phone", help="pair the phone for phone mode (laptop)")
+    p_pair.add_argument("target", nargs="?", default="", help="IP:PORT from the pairing dialog")
+    p_pair.add_argument("code", nargs="?", default="", help="pairing code")
+
+    p_prev = sub.add_parser("phone-preview", help="mirror the phone into a local VNC server")
+    p_prev.add_argument("--serial", default="", help="adb serial (default: first device)")
+    p_prev.add_argument("--port", type=int, default=5900)
+    p_prev.add_argument("--screenshot", default="", help="save the first frame as PNG")
+    p_prev.add_argument("--server-jar", default="", help="default: vendor/scrcpy-server")
+    p_prev.add_argument("--start-app", default=None, help="package to start ('' = launcher)")
+    p_prev.add_argument("--dpi", type=int, default=0)
 
     args = parser.parse_args(argv)
     cfg = config_mod.load(path=args.config)
@@ -135,6 +151,18 @@ def main(argv: list[str] | None = None) -> int:
         if args.interface:
             cfg.network.interface = args.interface
         return discover.run(cfg, timeout=args.timeout, verbose=args.verbose)
+
+    if args.cmd == "pair-phone":
+        from .tools import phone_tools
+        return phone_tools.pair_phone(args.target, args.code)
+
+    if args.cmd == "phone-preview":
+        from .tools import phone_tools
+        return phone_tools.phone_preview(
+            serial=args.serial, port=args.port,
+            screenshot=Path(args.screenshot) if args.screenshot else None,
+            server_jar=args.server_jar, start_app=args.start_app, dpi=args.dpi or None,
+            width=cfg.vnc.width, height=cfg.vnc.height)
 
     parser.error(f"unknown command: {args.cmd}")
     return 2

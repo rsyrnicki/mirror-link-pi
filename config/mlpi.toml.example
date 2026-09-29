@@ -28,6 +28,20 @@ address = "192.168.7.2/24"  # static address of usb0 on the Pi
 # off by default). Enable only after the plain gadget works, then reboot.
 ml_command = false
 
+# Phone mode (docs/phone-mode.md): mirror an Android phone with scrcpy over the Pi's
+# own Wi-Fi hotspot. `prepare-sd.sh --phone` appends an active [phone] section with a
+# random Wi-Fi password; these are the other settings you can add to it:
+# [phone]
+# enabled = true
+# wifi_ssid = "MirrorLink-Pi"
+# wifi_password = "..."          # 8-63 characters
+# wifi_country = "DE"
+# start_app = "com.google.android.apps.maps"   # "" = just the phone's launcher
+# dpi = 200                      # bigger number = bigger buttons on the car screen
+# max_fps = 30
+# bit_rate = 4000000
+# decoder = ""                   # "h264_v4l2m2m" = try the Pi's hardware decoder
+
 [dhcp]
 client_address = "192.168.7.44"   # what the car gets (same as all earlier sessions)
 

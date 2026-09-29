@@ -116,6 +116,36 @@ class WatchdogConfig:
 
 
 @dataclass
+class PhoneConfig:
+    """Phone mode: mirror an Android phone over Wi-Fi with scrcpy (docs/phone-mode.md)."""
+    enabled: bool = False
+    # The Pi's own Wi-Fi hotspot the phone joins. No internet is offered on it, so the
+    # phone keeps using mobile data for Maps/Spotify.
+    interface: str = "wlan0"
+    address: str = "192.168.8.1/24"
+    client_address: str = "192.168.8.44"
+    manage_hotspot: bool = True
+    wifi_ssid: str = "MirrorLink-Pi"
+    wifi_password: str = ""              # 8-63 characters; prepare-sd.sh --phone sets one
+    wifi_country: str = "DE"
+    wifi_channel: int = 6
+    # adb: its key (paired once with `mlpi pair-phone` on the laptop) lives in adb_home.
+    adb: str = "adb"
+    adb_home: str = "/var/lib/mlpi/adb"
+    legacy_port: int = 5555              # also try `adb tcpip` mode; 0 = don't
+    server_jar: str = "/opt/mlpi/vendor/scrcpy-server"
+    # Video: a new virtual display on the phone, exactly the car's screen size.
+    dpi: int = 200                       # higher = bigger UI on the car screen
+    max_fps: int = 30
+    bit_rate: int = 4_000_000
+    start_app: str = "com.google.android.apps.maps"   # "" = just the launcher
+    system_decorations: bool = True      # launcher + navigation bar on the display
+    keep_active: bool = True             # keep the phone awake while mirroring
+    decoder: str = ""                    # "" = software h264; "h264_v4l2m2m" = Pi hardware
+    decoder_threads: int = 1
+
+
+@dataclass
 class SessionConfig:
     # Every boot gets its own directory under <root>/sessions/.
     root: str = "/var/lib/mlpi"
@@ -143,6 +173,7 @@ class Config:
     device: DeviceConfig = field(default_factory=DeviceConfig)
     experiment: ExperimentConfig = field(default_factory=ExperimentConfig)
     watchdog: WatchdogConfig = field(default_factory=WatchdogConfig)
+    phone: PhoneConfig = field(default_factory=PhoneConfig)
     session: SessionConfig = field(default_factory=SessionConfig)
     led: LedConfig = field(default_factory=LedConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
