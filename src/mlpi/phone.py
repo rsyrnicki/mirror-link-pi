@@ -46,6 +46,7 @@ CODEC_H264 = 0x68323634
 MSG_INJECT_KEYCODE = 0
 MSG_INJECT_TOUCH_EVENT = 2
 MSG_BACK_OR_SCREEN_ON = 4
+MSG_SET_DISPLAY_POWER = 10
 MSG_START_APP = 16
 
 ACTION_DOWN, ACTION_UP, ACTION_MOVE = 0, 1, 2
@@ -80,6 +81,12 @@ def keycode_message(action: int, keycode: int, *, repeat: int = 0, metastate: in
 
 def back_or_screen_on_message(action: int) -> bytes:
     return struct.pack("!BB", MSG_BACK_OR_SCREEN_ON, action)
+
+
+def display_power_message(on: bool) -> bytes:
+    """With a virtual display, this powers the phone's *own* screen (scrcpy
+    Controller.setDisplayPower); apps keep rendering on the virtual display."""
+    return struct.pack("!BB", MSG_SET_DISPLAY_POWER, int(on))
 
 
 def start_app_message(name: str) -> bytes:
@@ -567,6 +574,10 @@ class PhoneLink:
             threading.Thread(target=self._drain, args=(control,), daemon=True).start()
             if c.start_app:
                 self._send(start_app_message(c.start_app))
+            if getattr(c, "screen_off", False):
+                # Locking the phone blanks the virtual display; a dark (but unlocked)
+                # screen doesn't, and saves battery.
+                self._send(display_power_message(False))
             video.settimeout(10)
             parser = StreamParser(dummy_byte=False)
             config_packet = b""        # SPS/PPS: kept for decoder restarts
@@ -619,10 +630,12 @@ class PhoneLink:
                             continue
                         decoder.write(pending_config + payload if pending_config else payload)
                         pending_config = b""
-                if decoder and time.monotonic() - stats_t >= 10:
+                if decoder and time.monotonic() - stats_t >= 5:
                     fps = (decoder.frames - stats_frames) / (time.monotonic() - stats_t)
                     self._event("phone_fps", fps=round(fps, 1), frames=decoder.frames,
                                 errors=decoder.errors)
+                    self._set_status(f"streaming {serial} {self._video_size[0]}x"
+                                     f"{self._video_size[1]} {fps:.0f} fps")
                     stats_t, stats_frames = time.monotonic(), decoder.frames
         finally:
             with self._control_lock:

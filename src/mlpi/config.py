@@ -141,6 +141,7 @@ class PhoneConfig:
     start_app: str = "com.google.android.apps.maps"   # "" = just the launcher
     system_decorations: bool = True      # launcher + navigation bar on the display
     keep_active: bool = True             # keep the phone awake while mirroring
+    screen_off: bool = True              # phone's own screen off (not locked) meanwhile
     decoder: str = ""                    # "" = software h264; "h264_v4l2m2m" = Pi hardware
     decoder_threads: int = 1
 

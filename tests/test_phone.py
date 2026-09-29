@@ -138,3 +138,9 @@ def test_missing_adb_binary_is_a_status_not_a_crash():
     link = ph.PhoneLink(cfg, frame, switch=None, serial="1.2.3.4:5555", adb=adb)
     assert link._find_device() == ""
     assert "adb unavailable" in link.status
+
+
+def test_display_power_matches_scrcpy_test_vector():
+    # test_serialize_set_display_power: {SC_CONTROL_MSG_TYPE_SET_DISPLAY_POWER, 1}
+    assert ph.display_power_message(True) == bytes([10, 1])
+    assert ph.display_power_message(False) == bytes([10, 0])

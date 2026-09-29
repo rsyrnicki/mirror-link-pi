@@ -133,6 +133,7 @@ server's output in `phone-server.log`, and the frame rate every 10 s (`phone_fps
 | `decoder` | `""` (software) | `h264_v4l2m2m` tries the Pi's hardware decoder (experimental) |
 | `system_decorations` | `true` | launcher and navigation bar on the virtual display |
 | `keep_active` | `true` | keeps the phone awake while mirroring |
+| `screen_off` | `true` | turns the phone's own screen off (without locking — a locked phone blanks the car screen) |
 | `wifi_ssid` / `wifi_password` / `wifi_country` / `wifi_channel` | | the Pi's hotspot |
 
 ## Open questions (to check with the real A56)

@@ -64,6 +64,8 @@ def pair_phone(target: str = "", code: str = "", *, adb_home: Path | None = None
 def phone_preview(*, serial: str = "", port: int = 5900, screenshot: Path | None = None,
                   server_jar: str = "", adb_home: Path | None = None, width: int = 800,
                   height: int = 480, start_app: str | None = None, dpi: int | None = None,
+                  max_fps: int | None = None, bit_rate: int | None = None,
+                  screen_off: bool = True,
                   adb_binary: str = "adb") -> int:
     from ..canvas import Canvas
     from ..config import Config
@@ -81,6 +83,11 @@ def phone_preview(*, serial: str = "", port: int = 5900, screenshot: Path | None
         cfg.start_app = start_app
     if dpi:
         cfg.dpi = dpi
+    if max_fps:
+        cfg.max_fps = max_fps
+    if bit_rate:
+        cfg.bit_rate = bit_rate
+    cfg.screen_off = screen_off
     adb_home = adb_home or default_adb_home()
     adb = Adb(adb_binary, home=str(adb_home) if adb_home.exists() else "",
               server_port=ADB_SERVER_PORT)

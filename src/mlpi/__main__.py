@@ -85,6 +85,10 @@ def main(argv: list[str] | None = None) -> int:
     p_prev.add_argument("--server-jar", default="", help="default: vendor/scrcpy-server")
     p_prev.add_argument("--start-app", default=None, help="package to start ('' = launcher)")
     p_prev.add_argument("--dpi", type=int, default=0)
+    p_prev.add_argument("--max-fps", type=int, default=0)
+    p_prev.add_argument("--bit-rate", type=int, default=0, help="e.g. 8000000")
+    p_prev.add_argument("--screen-on", action="store_true",
+                        help="keep the phone's own screen on while mirroring")
 
     args = parser.parse_args(argv)
     cfg = config_mod.load(path=args.config)
@@ -162,6 +166,8 @@ def main(argv: list[str] | None = None) -> int:
             serial=args.serial, port=args.port,
             screenshot=Path(args.screenshot) if args.screenshot else None,
             server_jar=args.server_jar, start_app=args.start_app, dpi=args.dpi or None,
+            max_fps=args.max_fps or None, bit_rate=args.bit_rate or None,
+            screen_off=not args.screen_on,
             width=cfg.vnc.width, height=cfg.vnc.height)
 
     parser.error(f"unknown command: {args.cmd}")

@@ -178,8 +178,9 @@ def test_phone_video_reaches_the_car_and_touch_reaches_the_phone(tmp_path):
     # Control stream: start the app, then the simulator's tap in the middle of the car
     # screen (160,100) → (320,200) on the 640×400 phone display: DOWN then UP.
     ctl = bytes(adb.server.control)
-    assert ctl.startswith(ph.start_app_message("com.example.maps"))
-    touches = ctl[len(ph.start_app_message("com.example.maps")):]
+    prefix = ph.start_app_message("com.example.maps") + ph.display_power_message(False)
+    assert ctl.startswith(prefix)                 # start the app, phone screen off
+    touches = ctl[len(prefix):]
     msgs = [touches[i:i + 32] for i in range(0, len(touches), 32)]
     decoded = [(m[1], struct.unpack_from("!iiHH", m, 10)) for m in msgs]
     assert decoded == [(ph.ACTION_DOWN, (320, 200, PHONE_W, PHONE_H)),
