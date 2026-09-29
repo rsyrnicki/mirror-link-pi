@@ -1,0 +1,9 @@
+### HELLO (32 bytes) ###
+<Status>
+  <Init/>
+</Status>
+### PROBE SENT (45 bytes) ###
+<Req id="4"><Interface action="list"/></Req>
+### RESPONSE (67 bytes) ###
+<Rsp id="4" status="syntaxError" msg="url attribute is missing"/>
+### END ###

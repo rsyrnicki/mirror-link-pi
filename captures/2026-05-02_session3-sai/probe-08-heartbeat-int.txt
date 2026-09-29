@@ -1,0 +1,9 @@
+### HELLO (32 bytes) ###
+<Status>
+  <Init/>
+</Status>
+### PROBE SENT (45 bytes) ###
+<Req id="8"><Heartbeat interval="10"/></Req>
+### RESPONSE (68 bytes) ###
+<Rsp id="8" status="syntaxError" msg="ival attribute is missing"/>
+### END ###

@@ -1,0 +1,26 @@
+[Unit]
+Description=MirrorLink-Pi USB gadget (NCM + MirrorLink USB command) + usb0 address
+DefaultDependencies=no
+After=sys-kernel-config.mount local-fs.target mlpi-session.service systemd-modules-load.service
+Wants=sys-kernel-config.mount mlpi-session.service
+Before=network-pre.target
+Conflicts=shutdown.target
+RequiresMountsFor=/sys/kernel/config
+PartOf=mlpi.target
+
+[Service]
+# Stays running: holds the FunctionFS ep0 (closing it unbinds the gadget), answers
+# the MirrorLink USB command and logs USB events. READY once usb0 has its address.
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=90
+Restart=on-failure
+RestartSec=2
+Environment=PYTHONPATH=/opt/mlpi/src
+WorkingDirectory=/opt/mlpi
+ExecStart=/usr/bin/python3 -m mlpi gadget-up
+# Tear-down: unbind UDC so a clean shutdown deregisters us with the host.
+ExecStop=/bin/sh -c 'echo "" > /sys/kernel/config/usb_gadget/g_mlpi/UDC || true'
+
+[Install]
+WantedBy=mlpi.target

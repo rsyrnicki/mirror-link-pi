@@ -1,0 +1,9 @@
+### HELLO (32 bytes) ###
+<Status>
+  <Init/>
+</Status>
+### PROBE SENT (45 bytes) ###
+<Req id="7"><Auth id="mirrorlink-pi"/></Req>
+### RESPONSE (58 bytes) ###
+<Rsp id="7" status="syntaxError" msg="unknown command"/>
+### END ###

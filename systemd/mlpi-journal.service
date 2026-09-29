@@ -1,0 +1,15 @@
+[Unit]
+Description=MirrorLink-Pi: copy this boot's whole journal (incl. kernel USB messages) into the session directory
+After=mlpi-session.service systemd-journald.service
+Wants=mlpi-session.service
+PartOf=mlpi.target
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'exec journalctl -b -f -o short-monotonic --no-hostname --no-pager >> "$(cat /run/mlpi/session-dir)/journal.txt"'
+Restart=always
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=mlpi.target

@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scpd xmlns="urn:schemas-upnp-org:service-1-0">
+  <specVersion>
+    <major>1</major>
+    <minor>0</minor>
+  </specVersion>
+  <actionList>
+    <action>
+      <name>GetApplicationList</name>
+      <argumentList>
+        <argument>
+          <name>AppListingFilter</name>
+          <direction>in</direction>
+          <relatedStateVariable>A_ARG_TYPE_String</relatedStateVariable>
+        </argument>
+        <argument>
+          <name>ProfileID</name>
+          <direction>in</direction>
+          <relatedStateVariable>A_ARG_TYPE_ProfileID</relatedStateVariable>
+        </argument>
+        <argument>
+          <name>AppListing</name>
+          <direction>out</direction>
+          <relatedStateVariable>A_ARG_TYPE_AppList</relatedStateVariable>
+        </argument>
+      </argumentList>
+    </action>
+    <action>
+      <name>LaunchApplication</name>
+      <argumentList>
+        <argument>
+          <name>AppID</name>
+          <direction>in</direction>
+          <relatedStateVariable>A_ARG_TYPE_AppID</relatedStateVariable>
+        </argument>
+        <argument>
+          <name>ProfileID</name>
+          <direction>in</direction>
+          <relatedStateVariable>A_ARG_TYPE_ProfileID</relatedStateVariable>
+        </argument>
+        <argument>
+          <name>AppURI</name>
+          <direction>out</direction>
+          <relatedStateVariable>A_ARG_TYPE_URI</relatedStateVariable>
+        </argument>
+      </argumentList>
+    </action>
+    <action>
+      <name>TerminateApplication</name>
+      <argumentList>
+        <argument>
+          <name>AppID</name>
+          <direction>in</direction>
+          <relatedStateVariable>A_ARG_TYPE_AppID</relatedStateVariable>
+        </argument>
+        <argument>
+          <name>ProfileID</name>
+          <direction>in</direction>
+          <relatedStateVariable>A_ARG_TYPE_ProfileID</relatedStateVariable>
+        </argument>
+        <argument>
+          <name>TerminationResult</name>
+          <direction>out</direction>
+          <relatedStateVariable>A_ARG_TYPE_Bool</relatedStateVariable>
+        </argument>
+      </argumentList>
+    </action>
+    <action>
+      <name>GetApplicationStatus</name>
+      <argumentList>
+        <argument>
+          <name>AppID</name>
+          <direction>in</direction>
+          <relatedStateVariable>A_ARG_TYPE_AppID</relatedStateVariable>
+        </argument>
+        <argument>
+          <name>AppStatus</name>
+          <direction>out</direction>
+          <relatedStateVariable>A_ARG_TYPE_AppStatus</relatedStateVariable>
+        </argument>
+      </argumentList>
+    </action>
+    <action>
+      <name>GetApplicationCertificateInfo</name>
+      <argumentList>
+        <argument>
+          <name>AppCertificateInfoFilter</name>
+          <direction>in</direction>
+          <relatedStateVariable>A_ARG_TYPE_String</relatedStateVariable>
+        </argument>
+        <argument>
+          <name>AppCertificateList</name>
+          <direction>out</direction>
+          <relatedStateVariable>A_ARG_TYPE_AppCertificateInfo</relatedStateVariable>
+        </argument>
+      </argumentList>
+    </action>
+  </actionList>
+  <serviceStateTable>
+    <stateVariable sendEvents="yes">
+      <name>AppListUpdate</name>
+      <dataType>string</dataType>
+    </stateVariable>
+    <stateVariable sendEvents="yes">
+      <name>AppStatusUpdate</name>
+      <dataType>string</dataType>
+    </stateVariable>
+    <stateVariable sendEvents="no">
+      <name>A_ARG_TYPE_AppList</name>
+      <dataType>string</dataType>
+    </stateVariable>
+    <stateVariable sendEvents="no">
+      <name>A_ARG_TYPE_AppStatus</name>
+      <dataType>string</dataType>
+    </stateVariable>
+    <stateVariable sendEvents="no">
+      <name>A_ARG_TYPE_AppID</name>
+      <dataType>string</dataType>
+    </stateVariable>
+    <stateVariable sendEvents="no">
+      <name>A_ARG_TYPE_ProfileID</name>
+      <dataType>ui4</dataType>
+    </stateVariable>
+    <stateVariable sendEvents="no">
+      <name>A_ARG_TYPE_URI</name>
+      <dataType>string</dataType>
+    </stateVariable>
+    <stateVariable sendEvents="no">
+      <name>A_ARG_TYPE_String</name>
+      <dataType>string</dataType>
+    </stateVariable>
+    <stateVariable sendEvents="no">
+      <name>A_ARG_TYPE_Bool</name>
+      <dataType>boolean</dataType>
+    </stateVariable>
+    <stateVariable sendEvents="no">
+      <name>A_ARG_TYPE_INT</name>
+      <dataType>ui4</dataType>
+    </stateVariable>
+    <stateVariable sendEvents="no">
+      <name>A_ARG_TYPE_AppCertificateInfo</name>
+      <dataType>string</dataType>
+    </stateVariable>
+  </serviceStateTable>
+</scpd>

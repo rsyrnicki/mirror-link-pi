@@ -1,0 +1,9 @@
+### HELLO (32 bytes) ###
+<Status>
+  <Init/>
+</Status>
+### PROBE SENT (34 bytes) ###
+<Req id="8"><ListServices/></Req>
+### RESPONSE (58 bytes) ###
+<Rsp id="8" status="syntaxError" msg="unknown command"/>
+### END ###

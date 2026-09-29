@@ -1,0 +1,117 @@
+# Protocol variants, tried in this order — one per connection attempt of the car —
+# until the car opens a TCP connection to the VNC port. See src/mlpi/variants.py.
+#
+# Every key is optional; omitted keys take the default, which follows the MirrorLink
+# spec (ETSI TS 103 544 v1.3.1) for a MirrorLink 1.0 server: stand-alone VNC server
+# entry with appCategory 0xF0000001, no X_mirrorLinkVersion (so no DAP needed).
+# docs/spec-notes.md explains the clauses behind each knob.
+#
+# Keys:
+#   ml_version                ""/"1.0"/"1.1" — <X_mirrorLinkVersion> in the device XML
+#                             ("" = omitted: client must assume 1.0, Part 13 §7.6)
+#   app_category              appCategory of the VNC server entry (spec: 0xF0000001)
+#   app_trust_level           <appInfo><trustLevel>   ("" = omitted)
+#   audio_info                include an <audioInfo> block in the VNC entry
+#   audio_trust_level         <audioInfo><trustLevel> ("" = omitted)
+#   display_content_category  add <displayInfo><contentCategory> ("" = no displayInfo)
+#   cert_url                  include <appCertificateURL>
+#   applist_namespace         xmlns on <appList> (XSD has it, spec example doesn't)
+#   home_app                  also list a VNC "home screen" UI app (category 0x00010001)
+#   dap                       also list a DAP endpoint (answers "attestation not
+#                             available" — we have no CCC certificate)
+#   rtp_apps                  also list RTP audio server+client entries for payloads
+#                             98/99, shaped like a Galaxy S6's (no audio streamed yet)
+#   allowed_profile_ids       <allowedProfileIDs>0</allowedProfileIDs> in each entry (S6)
+#   uri_scheme                scheme of the AppURI returned by LaunchApplication
+#   context_app_category      VNC context information: application category
+#   context_trust_level       VNC context information: trust level
+#
+# Order (car session 2026-09-28): the bare spec-1.0 entry (0xF0000001 only) made the
+# MIB2 stop after GetApplicationList — it never subscribed or launched. In the May
+# sessions it DID launch with the fuller legacy entry. So variants with a launchable
+# UI app / legacy entry go first; spec-1.0 is kept as a reference.
+#
+# Galaxy S6 probe (2026-09-28): a certified phone lists RTP audio server/client
+# entries for payloads 98/99 — exactly what the MIB2's client profile announces — and
+# we listed none. The s6-* variants add them, so they go first.
+#
+# The MIB2 loops the handshake every ~2.7 s; each variant gets `cycles_per_variant`
+# (default 2) cycles, so 10 variants ≈ 55 s per full round.
+
+[[variant]]
+name = "s6-audio-home"
+description = "spec-1.0-home plus RTP audio entries and allowedProfileIDs, app list shaped like a Galaxy S6's."
+home_app = true
+rtp_apps = true
+allowed_profile_ids = true
+applist_namespace = false
+app_trust_level = "0x80"
+
+[[variant]]
+name = "s6-audio-legacy"
+description = "legacy-session3 (what the car launched in May) plus S6-style RTP audio entries."
+app_category = "0x00000000"
+app_trust_level = "0x0080"
+audio_info = true
+audio_trust_level = "0x0080"
+cert_url = true
+uri_scheme = "vnc"
+rtp_apps = true
+allowed_profile_ids = true
+applist_namespace = false
+
+[[variant]]
+name = "s6-audio"
+description = "spec-1.0 stand-alone VNC server plus S6-style RTP audio entries."
+rtp_apps = true
+allowed_profile_ids = true
+applist_namespace = false
+app_trust_level = "0x80"
+
+[[variant]]
+name = "spec-1.0-home"
+description = "spec-1.0 plus a VNC 'home screen' UI application the car can list and launch."
+home_app = true
+
+[[variant]]
+name = "legacy-session3"
+description = "What the car saw in session 3 (non-spec category 0x00000000, audioInfo, trust claims, cert URL), with the escaping fix. Control group."
+app_category = "0x00000000"
+app_trust_level = "0x0080"
+audio_info = true
+audio_trust_level = "0x0080"
+cert_url = true
+uri_scheme = "vnc"
+
+[[variant]]
+name = "legacy-session3-home"
+description = "legacy-session3 plus the home screen UI application."
+app_category = "0x00000000"
+app_trust_level = "0x0080"
+audio_info = true
+audio_trust_level = "0x0080"
+cert_url = true
+uri_scheme = "vnc"
+home_app = true
+
+[[variant]]
+name = "spec-1.1-dap-home"
+description = "MirrorLink 1.1 with DAP endpoint and home screen application."
+ml_version = "1.1"
+dap = true
+home_app = true
+
+[[variant]]
+name = "spec-1.0"
+description = "Spec-compliant MirrorLink 1.0 server: one stand-alone VNC server entry (0xF0000001), nothing else."
+
+[[variant]]
+name = "spec-1.1-dap"
+description = "Declares MirrorLink 1.1 (MIB II Std is a 1.1 client) and lists a DAP endpoint, as a 1.1 client expects to run DAP first."
+ml_version = "1.1"
+dap = true
+
+[[variant]]
+name = "spec-1.1"
+description = "MirrorLink 1.1 without a DAP endpoint (1.1/1.2 clients may skip DAP, Part 4 note)."
+ml_version = "1.1"

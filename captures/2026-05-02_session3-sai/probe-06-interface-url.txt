@@ -1,0 +1,9 @@
+### HELLO (32 bytes) ###
+<Status>
+  <Init/>
+</Status>
+### PROBE SENT (39 bytes) ###
+<Req id="6"><Interface url="*"/></Req>
+### RESPONSE (38 bytes) ###
+<Rsp id="6" status="noMatchingUrl"/>
+### END ###

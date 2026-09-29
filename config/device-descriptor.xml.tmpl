@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0">
+  <specVersion>
+    <major>1</major>
+    <minor>0</minor>
+  </specVersion>
+  <URLBase>http://${address}:${http_port}/</URLBase>
+  <device>
+    <deviceType>${device_type}</deviceType>
+    <friendlyName>${friendly_name}</friendlyName>
+    <manufacturer>${manufacturer}</manufacturer>
+    <modelName>${model_name}</modelName>
+    <modelNumber>${model_number}</modelNumber>
+    <UDN>uuid:${device_uuid}</UDN>
+    <presentationURL>/presentation</presentationURL>
+    <serviceList>
+      <service>
+        <serviceType>urn:schemas-upnp-org:service:TmApplicationServer:1</serviceType>
+        <serviceId>urn:upnp-org:serviceId:TmApplicationServer1</serviceId>
+        <SCPDURL>/scpd/TmApplicationServer.xml</SCPDURL>
+        <controlURL>/ctrl/TmApplicationServer</controlURL>
+        <eventSubURL>/evt/TmApplicationServer</eventSubURL>
+      </service>
+      <service>
+        <serviceType>urn:schemas-upnp-org:service:TmClientProfile:1</serviceType>
+        <serviceId>urn:upnp-org:serviceId:TmClientProfile1</serviceId>
+        <SCPDURL>/scpd/TmClientProfile.xml</SCPDURL>
+        <controlURL>/ctrl/TmClientProfile</controlURL>
+        <eventSubURL>/evt/TmClientProfile</eventSubURL>
+      </service>
+      <service>
+        <serviceType>urn:schemas-upnp-org:service:TmNotificationServer:1</serviceType>
+        <serviceId>urn:upnp-org:serviceId:TmNotificationServer1</serviceId>
+        <SCPDURL>/scpd/TmNotificationServer.xml</SCPDURL>
+        <controlURL>/ctrl/TmNotificationServer</controlURL>
+        <eventSubURL>/evt/TmNotificationServer</eventSubURL>
+      </service>
+    </serviceList>
+    ${extra_device_xml}
+    <!-- X_mirrorLinkVersion is set per experiment variant (config/variants.toml).
+         When omitted, ETSI TS 103 544-13 §7.6 says the client "shall assume a
+         version 1.0 MirrorLink Server", and 1.0 does not require DAP. -->
+    <!-- X_Signature OMITTED: mandatory for 1.1+ but hopefully not enforced. -->
+  </device>
+</root>

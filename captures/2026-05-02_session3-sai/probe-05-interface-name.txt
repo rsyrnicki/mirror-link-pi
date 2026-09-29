@@ -1,0 +1,9 @@
+### HELLO (32 bytes) ###
+<Status>
+  <Init/>
+</Status>
+### PROBE SENT (40 bytes) ###
+<Req id="5"><Interface name="*"/></Req>
+### RESPONSE (0 bytes) ###
+
+### END ###
