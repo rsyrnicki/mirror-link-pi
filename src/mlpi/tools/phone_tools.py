@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-from ..phone import Adb, PhoneLink
+from ..phone import Adb, PhoneLink, discover_adb_tls
 
 ADB_SERVER_PORT = 5039          # our own adb server, never the user's normal one
 
@@ -84,11 +84,23 @@ def phone_preview(*, serial: str = "", port: int = 5900, screenshot: Path | None
     adb_home = adb_home or default_adb_home()
     adb = Adb(adb_binary, home=str(adb_home) if adb_home.exists() else "",
               server_port=ADB_SERVER_PORT)
+    if serial and ":" in serial:
+        adb.connect(serial)                      # wireless: pairing alone doesn't connect
     if not serial:
         devices = [s for s, state in adb.devices() if state == "device"]
         if not devices:
-            print("no phone found by adb. Plug it in by USB (USB debugging on), or pair it\n"
-                  "(mlpi pair-phone) and pass --serial IP:PORT from Wireless debugging.")
+            # Paired phones announce their wireless-debugging port over mDNS.
+            print("looking for the phone's Wireless debugging on this network …")
+            for host, port in discover_adb_tls("", "", timeout=4.0):
+                target = f"{host}:{port}"
+                if adb.connect(target) and adb.state(target) == "device":
+                    print(f"connected to {target}")
+                    devices = [target]
+                    break
+        if not devices:
+            print("no phone found. Check that Wireless debugging is ON and the phone is on the\n"
+                  "same Wi-Fi, or pass --serial IP:PORT — the address on the Wireless debugging\n"
+                  "screen itself (NOT the one in the pairing dialog).")
             adb.run("kill-server", timeout=10)
             return 1
         serial = devices[0]
