@@ -257,8 +257,10 @@ class InputRouter:
         self._phone = (frame, sink)
 
     def _phone_sink(self) -> InputSink | None:
+        """The phone side gets input whenever the car isn't looking at the status
+        screen (phone video or the Pi's launcher)."""
         phone = self._phone
-        if phone and self.switch.showing(phone[0]):
+        if phone and not self.switch.showing(self.switch.canvas):
             return phone[1]
         return None
 

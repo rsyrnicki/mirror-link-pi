@@ -428,6 +428,15 @@ class PhoneLink:
         self._down = False
         self._last_pos = (-1, -1)
         self._procs: list[subprocess.Popen] = []
+        # The Pi's own launcher (launcher.py): tiles, and a Home button over the video.
+        self.launcher = None
+        if getattr(cfg, "launcher", False) and switch is not None:
+            from .launcher import Launcher, parse_apps
+            self.launcher = Launcher(switch.new_video_frame(), parse_apps(cfg.apps))
+        self._tile_press: tuple[int, int] | None = None
+        self._home_press = False
+        self._show_video_on_frame = False
+        self.device_name = ""
 
     # ----- helpers -----
 
@@ -453,7 +462,73 @@ class PhoneLink:
             except OSError as exc:
                 log.info("phone control send failed: %s", exc)
 
+    def show_launcher(self) -> None:
+        if self.launcher:
+            self.launcher.status = self.device_name
+            self.launcher.go(-1)
+            self.switch.show(self.launcher.frame)
+            self._event("phone_launcher")
+
+    def _load_app_list(self, serial: str) -> None:
+        """Ask the phone for its launchable apps (scrcpy's list_apps) for the
+        launcher's "All apps" pages. Runs in the background once per connection."""
+        from .launcher import parse_app_list
+        out = self.adb.run("shell", f"CLASSPATH={REMOTE_JAR}", "app_process", "/",
+                           "com.genymobile.scrcpy.Server", SCRCPY_VERSION, "list_apps=true",
+                           "log_level=info", serial=serial, timeout=90)
+        apps = parse_app_list(out.stdout)
+        self._event("phone_app_list", count=len(apps))
+        if apps and self.launcher:
+            self.launcher.set_all_apps(apps)
+
+    def open_app(self, app) -> None:
+        self._send(start_app_message(app.package))
+        self._event("phone_open_app", name=app.name, package=app.package)
+        self.switch.show(self.frame)
+
+    def _launcher_pointer(self, x: int, y: int, buttons: int) -> bool:
+        """Handle input that belongs to the launcher; True if consumed."""
+        if not self.launcher:
+            return False
+        pressed = bool(buttons & 1)
+        if self.switch.showing(self.launcher.frame):
+            if pressed:                               # act on release, like a button
+                if self._tile_press is None:
+                    self._tile_press = (x, y)
+            elif self._tile_press is not None:
+                target = self.launcher.target_at(*self._tile_press)
+                self._tile_press = None
+                if target is not None and self.launcher.target_at(x, y) == target:
+                    self._launcher_action(target)
+            return True
+        if self._home_press:                          # swallow until the finger lifts
+            if not pressed:
+                self._home_press = False
+                if self.launcher.in_home_button(x, y):
+                    self.show_launcher()
+            return True
+        if pressed and not self._down and self.launcher.in_home_button(x, y):
+            self._home_press = True
+            return True
+        return False
+
+    def _launcher_action(self, target) -> None:
+        kind, value = target
+        launcher = self.launcher
+        if kind == "app":
+            self.open_app(value)
+        elif kind == "all":
+            launcher.go(0)
+        elif kind == "home":
+            launcher.go(-1)
+        elif kind == "prev":
+            launcher.go(launcher.page - 1)
+        elif kind == "next":
+            launcher.go(launcher.page + 1)
+
     def on_pointer(self, x: int, y: int, buttons: int) -> None:
+        if self._launcher_pointer(x, y, buttons):
+            return
         vw, vh = self._video_size
         fx = min(vw - 1, max(0, x * vw // self.frame.width))
         fy = min(vh - 1, max(0, y * vh // self.frame.height))
@@ -474,6 +549,10 @@ class PhoneLink:
 
     def on_key(self, keysym: int, down: bool) -> None:
         keycode = KEYMAP.get(keysym)
+        if keycode == KEYCODE_HOME and self.launcher:
+            if not down:
+                self.show_launcher()
+            return
         if keycode is None:
             self._event("phone_key_unmapped", keysym=f"0x{keysym:08x}", down=down)
             return
@@ -572,8 +651,16 @@ class PhoneLink:
             with self._control_lock:
                 self._control = control
             threading.Thread(target=self._drain, args=(control,), daemon=True).start()
+            if self.launcher:
+                threading.Thread(target=self._load_app_list, args=(serial,),
+                                 name="phone-apps", daemon=True).start()
             if c.start_app:
                 self._send(start_app_message(c.start_app))
+                self._show_video_on_frame = True
+            elif self.launcher:
+                self.show_launcher()
+            else:
+                self._show_video_on_frame = True
             if getattr(c, "screen_off", False):
                 # Locking the phone blanks the virtual display; a dark (but unlocked)
                 # screen doesn't, and saves battery.
@@ -587,11 +674,15 @@ class PhoneLink:
 
             def on_frame(data: bytes) -> None:
                 nonlocal first
+                if self.launcher:
+                    data = self.launcher.paint_home_button(data)
                 self.frame.update(data)
                 if first:
                     first = False
-                    self.switch.show(self.frame)
                     self._event("phone_first_frame")
+                if self._show_video_on_frame:
+                    self._show_video_on_frame = False
+                    self.switch.show(self.frame)
 
             while not self._stop.is_set():
                 try:
@@ -605,7 +696,10 @@ class PhoneLink:
                 for ev in parser.feed(data):
                     kind = ev[0]
                     if kind == "device":
+                        self.device_name = ev[1]
                         self._event("phone_device", name=ev[1])
+                        if self.launcher and self.switch.showing(self.launcher.frame):
+                            self.show_launcher()          # redraw with the phone's name
                     elif kind == "codec" and ev[1] != CODEC_H264:
                         raise PhoneDisconnected(f"unexpected codec 0x{ev[1]:08x}")
                     elif kind == "session":

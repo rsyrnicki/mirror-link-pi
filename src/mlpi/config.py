@@ -115,6 +115,11 @@ class WatchdogConfig:
     max_reconnects: int = 20
 
 
+def _default_apps() -> list[dict]:
+    from .launcher import DEFAULT_APPS
+    return [{"name": a.name, "package": a.package, "colour": a.colour} for a in DEFAULT_APPS]
+
+
 @dataclass
 class PhoneConfig:
     """Phone mode: mirror an Android phone over Wi-Fi with scrcpy (docs/phone-mode.md)."""
@@ -138,8 +143,14 @@ class PhoneConfig:
     dpi: int = 200                       # higher = bigger UI on the car screen
     max_fps: int = 30
     bit_rate: int = 4_000_000
-    start_app: str = "com.google.android.apps.maps"   # "" = just the launcher
-    system_decorations: bool = True      # launcher + navigation bar on the display
+    # The Pi draws its own launcher (tiles for `apps`, a Home button over the video).
+    # With start_app set, that app opens directly instead.
+    launcher: bool = True
+    # Home-page tiles (up to 7; an "All apps" tile is added). Override in mlpi.toml:
+    #   apps = [{name = "Maps", package = "com.google.android.apps.maps", colour = "#1a73e8"}]
+    apps: list = field(default_factory=lambda: _default_apps())
+    start_app: str = ""
+    system_decorations: bool = False     # the phone's own launcher + nav bar on the display
     keep_active: bool = True             # keep the phone awake while mirroring
     screen_off: bool = True              # phone's own screen off (not locked) meanwhile
     decoder: str = ""                    # "" = software h264; "h264_v4l2m2m" = Pi hardware

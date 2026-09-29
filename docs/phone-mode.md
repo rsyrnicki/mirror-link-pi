@@ -85,7 +85,7 @@ PYTHONPATH=src python3 -m mlpi phone-preview --screenshot phone.png
 
 Then open `127.0.0.1:5900` in any VNC viewer (Remmina, `vncviewer 127.0.0.1::5900`).
 You should see an 800×480 screen with Maps, and mouse clicks act as touches. Try
-`--start-app ""` for the launcher and `--dpi 160` or `--dpi 240` to find a comfortable
+`--start-app <package>` to open one app directly and `--dpi 160` or `--dpi 240` to find a comfortable
 size.
 
 **2. Phone → Pi → laptop.** This is the real chain:
@@ -109,6 +109,22 @@ size.
 The car's back key acts as Android *Back*, and Home and OK are mapped too. Other
 knob and key events are logged (`phone_key_unmapped`) so they can be mapped later.
 
+## The launcher
+
+Android puts only a special "secondary home" on scrcpy's virtual display — on Samsung
+One UI's stripped-down DeX launcher with tiny icons; normal launchers (One UI, Nothing, …)
+can't be used there. So the Pi draws its own home screen for the car:
+
+- **Home page:** large tiles for up to 7 favourite apps (`apps` in `mlpi.toml`) plus
+  **All apps**. Favourites that aren't installed on the phone are hidden.
+- **All apps:** every launchable app on the phone, 12 per page, alphabetical. The list
+  comes from the phone itself when it connects.
+- **Home button:** a small house in the bottom-left corner of every app brings the tiles
+  back (the car's Home key does too).
+
+Tiles show the app's name and initial rather than its real icon (scrcpy has no way to
+send icons). Names are drawn with the Pi's pixel font: letters are converted, e.g. Ä → AE.
+
 ## What the `PHONE:` line means
 
 | Status | Meaning / fix |
@@ -127,11 +143,13 @@ server's output in `phone-server.log`, and the frame rate every 10 s (`phone_fps
 
 | Key | Default | |
 |---|---|---|
-| `start_app` | `com.google.android.apps.maps` | app opened on the virtual display; `""` = launcher only |
+| `launcher` | `true` | the Pi's own launcher (below) |
+| `apps` | Google Maps, HERE WeGo, Spotify, Audible, Home Assistant, WhatsApp, Phone | home-page tiles, max 7: `apps = [{name = "Waze", package = "com.waze", colour = "#33ccff"}]` |
+| `start_app` | `""` | open this app directly instead of the launcher |
 | `dpi` | `200` | density: higher = larger UI on the car screen |
 | `max_fps` / `bit_rate` | `30` / `4000000` | lower them if the Zero 2 W can't keep up (see `phone_fps`) |
 | `decoder` | `""` (software) | `h264_v4l2m2m` tries the Pi's hardware decoder (experimental) |
-| `system_decorations` | `true` | launcher and navigation bar on the virtual display |
+| `system_decorations` | `false` | Samsung's secondary-display launcher + navigation bar on the virtual display |
 | `keep_active` | `true` | keeps the phone awake while mirroring |
 | `screen_off` | `true` | turns the phone's own screen off (without locking — a locked phone blanks the car screen) |
 | `wifi_ssid` / `wifi_password` / `wifi_country` / `wifi_channel` | | the Pi's hotspot |
