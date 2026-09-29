@@ -10,6 +10,8 @@
 #   sessions/NNNN/...   one directory per Pi boot (events, pcap, journal, VNC dumps)
 #   journal/            the persistent systemd journal (readable with journalctl -D)
 #   REPORT.txt          `mlpi report` over every session
+#   zips/session-NNNN.zip  one zip per session (its files + its own REPORT.txt),
+#   zips/latest.zip        small enough to upload; latest = the most recent boot
 
 set -euo pipefail
 
@@ -68,9 +70,32 @@ fi
 PYTHONPATH="$REPO/src" python3 -m mlpi report "$DEST"/sessions/[0-9]* > "$DEST/REPORT.txt" \
     || echo "report generation failed (the raw data is still there)" >&2
 
+# One upload-sized zip per session (the full set is often too big to send).
+mkdir -p "$DEST/zips"
+python3 - "$DEST" "$REPO/src" <<'PY'
+import subprocess, sys, zipfile
+from pathlib import Path
+dest, src = Path(sys.argv[1]), sys.argv[2]
+sessions = sorted(p for p in (dest / "sessions").iterdir() if p.is_dir() and p.name.isdigit())
+for s in sessions:
+    report = subprocess.run([sys.executable, "-m", "mlpi", "report", str(s)], capture_output=True,
+                            text=True, env={"PYTHONPATH": src}).stdout
+    out = dest / "zips" / f"session-{s.name}.zip"
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        z.writestr(f"{s.name}/REPORT.txt", report)
+        for f in sorted(s.rglob("*")):
+            if f.is_file():
+                z.write(f, f"{s.name}/{f.relative_to(s)}")
+    print(f"  {out.name}: {out.stat().st_size / 1e6:.1f} MB")
+if sessions:
+    latest = dest / "zips" / f"session-{sessions[-1].name}.zip"
+    (dest / "zips" / "latest.zip").write_bytes(latest.read_bytes())
+PY
+
 if [[ -n "${SUDO_USER:-}" ]]; then
     chown -R "$SUDO_USER": "$DEST"
 fi
 
 echo "copied $(ls "$DEST/sessions" | wc -l) session(s) to $DEST"
 echo "summary: $DEST/REPORT.txt"
+echo "to send one session: $DEST/zips/latest.zip (or zips/session-NNNN.zip)"
