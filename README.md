@@ -3,13 +3,29 @@
 Make a Raspberry Pi Zero 2 W appear as a MirrorLink phone to a car head unit, so the
 car displays a screen rendered by the Pi (over VNC, over USB).
 
-> **Status (2026-09):** the VW MIB II ("VW-Mibstd2") talks to us through the whole UPnP
-> handshake up to `LaunchApplication` + `GetApplicationStatus = Foreground`, but has
-> never opened the VNC connection yet. The implementation now follows the public
-> MirrorLink spec (ETSI TS 103 544 — see [`docs/spec-notes.md`](docs/spec-notes.md)),
-> which revealed several things we did wrong, and every car trip is an automated
-> experiment: the Pi records everything and rotates through protocol variants until
-> the car connects. See [`docs/field-test.md`](docs/field-test.md).
+## First success — 2026-09-29
+
+A VW Polo's MIB2 Standard head unit (`VW-Mibstd2`) lists the Pi as a MirrorLink app,
+launches it and shows the Pi's screen, with touch input coming back to the Pi.
+
+| The car lists the Pi as a MirrorLink app | The Pi's screen on the car's display |
+|---|---|
+| ![MirrorLink-compatible apps: MirrorLink Pi](docs/img/car-app-list.jpg) | ![MirrorLink-Pi status screen on the head unit](docs/img/car-screen.jpg) |
+| **Touches reach the Pi (orange crosses), Pi Zero 2 W on the seat** | **Blocked while driving: the Pi is not CCC-certified** |
+| ![Touch markers on the car screen, Pi Zero 2 W connected by USB](docs/img/car-touch-and-pi.jpg) | !["The mobile device is restricted."](docs/img/car-restricted.jpg) |
+
+What made it work: the winning protocol variant is **`s6-audio-home`**. Its app list is
+shaped like a real Galaxy S6's (probed with `mlpi probe-phone`, see
+[`docs/probe-phone.md`](docs/probe-phone.md)): a VNC home-screen app plus RTP audio
+server/client entries for the payload types 98/99 the car announces. With a bare VNC
+entry the car stopped right after `GetApplicationList`. Every car trip is an automated
+experiment: the Pi records everything and rotates through protocol variants until the
+car connects, then locks the winner (see [`docs/field-test.md`](docs/field-test.md)).
+The implementation follows the public MirrorLink spec, ETSI TS 103 544 (see
+[`docs/spec-notes.md`](docs/spec-notes.md)).
+
+Known limit: while the car is moving, the head unit blocks the picture because the Pi
+cannot pass the CCC certification check (device attestation needs a CCC-issued key).
 
 ## How it works
 
