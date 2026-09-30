@@ -198,7 +198,7 @@ def _start_phone_mode(cfg: Config, phone_link, router: InputRouter, stop: thread
 
     wifi_dhcp = DhcpServer(interface=pc.interface, server_ip=server_ip, prefix=int(prefix or 24),
                            client_ip=pc.client_address, offer_router=False, offer_dns=False,
-                           session=session)
+                           session=session, is_car=False)
 
     def serve_wifi_dhcp() -> None:
         iface = Path("/sys/class/net") / pc.interface
@@ -294,6 +294,10 @@ def run(cfg: Config) -> int:
     dap = DapServer(bind_address=address, port=cfg.network.dap_port, session=session)
     guarded("dap", dap.serve_forever, stop, session)
 
+    from .health import HealthMonitor
+    health = HealthMonitor(session)
+    guarded("health", health.run, stop, session)
+
     wifi_dhcp = None
     if phone_link is not None:
         wifi_dhcp = _start_phone_mode(cfg, phone_link, router, stop, session)
@@ -320,7 +324,8 @@ def run(cfg: Config) -> int:
     try:
         stop.wait()
     finally:
-        for component in (link, phone_link, wifi_dhcp, dhcp, rfb, dap, ssdp, screen, led):
+        for component in (link, phone_link, wifi_dhcp, health, dhcp, rfb, dap, ssdp, screen,
+                          led):
             if component is not None:
                 component.stop()
         http_server.shutdown()

@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 from collections.abc import Callable
@@ -76,6 +77,10 @@ def init_session(root: Path, *, pointer: Path = RUN_POINTER) -> Path:
 
     sessions = root / "sessions"
     sessions.mkdir(exist_ok=True)
+    try:
+        prune_sessions(sessions)
+    except OSError as exc:
+        log.warning("could not prune old sessions: %s", exc)
     directory = sessions / f"{n:04d}"
     directory.mkdir(exist_ok=True)
 
@@ -90,6 +95,34 @@ def init_session(root: Path, *, pointer: Path = RUN_POINTER) -> Path:
     pointer.parent.mkdir(parents=True, exist_ok=True)
     pointer.write_text(str(directory) + "\n")
     return directory
+
+
+def prune_sessions(sessions: Path, *, keep: int = 40, keep_pcaps: int = 5,
+                   min_free: int = 1024 * 1024 * 1024) -> list[str]:
+    """Delete old recordings so the SD card never fills up.
+
+    Keeps the newest ``keep`` session directories, drops the pcaps (the big part) of
+    all but the newest ``keep_pcaps``, then removes the oldest sessions while less than
+    ``min_free`` bytes are free. Returns what was deleted.
+    """
+    dirs = sorted(p for p in sessions.iterdir() if p.is_dir() and not p.is_symlink()
+                  and p.name.isdigit())
+    removed = []
+    for old in dirs[:-keep] if len(dirs) > keep else []:
+        shutil.rmtree(old, ignore_errors=True)
+        removed.append(old.name)
+    dirs = [d for d in dirs if d.name not in removed]
+    for old in dirs[:-keep_pcaps] if len(dirs) > keep_pcaps else []:
+        for pcap in old.glob("*.pcap"):
+            pcap.unlink(missing_ok=True)
+            removed.append(f"{old.name}/{pcap.name}")
+    while len(dirs) > 1 and shutil.disk_usage(sessions).free < min_free:
+        oldest = dirs.pop(0)
+        shutil.rmtree(oldest, ignore_errors=True)
+        removed.append(f"{oldest.name} (low disk)")
+    if removed:
+        log.info("pruned old recordings: %s", ", ".join(removed))
+    return removed
 
 
 def current_session_dir(*, pointer: Path = RUN_POINTER) -> Path | None:

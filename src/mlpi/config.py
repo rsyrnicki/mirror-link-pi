@@ -157,6 +157,7 @@ class PhoneConfig:
     screen_off: bool = True              # phone's own screen off (not locked) meanwhile
     decoder: str = ""                    # "" = software h264; "h264_v4l2m2m" = Pi hardware
     decoder_threads: int = 1
+    max_lag: float = 0.5                 # seconds behind the phone before skipping ahead
 
 
 @dataclass

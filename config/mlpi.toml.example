@@ -42,6 +42,7 @@ ml_command = false
 # max_fps = 30
 # bit_rate = 4000000
 # decoder = ""                   # "h264_v4l2m2m" = try the Pi's hardware decoder
+# max_lag = 0.5                  # s behind the phone before skipping to a new keyframe
 
 [dhcp]
 client_address = "192.168.7.44"   # what the car gets (same as all earlier sessions)

@@ -182,3 +182,28 @@ def test_app_list_uses_its_own_jar_copy():
     link._load_app_list("s")
     assert calls[0] == ("push", "/opt/jar", ph.REMOTE_LIST_JAR)
     assert f"CLASSPATH={ph.REMOTE_LIST_JAR}" in calls[1]
+
+
+def test_lag_guard_skips_to_next_keyframe():
+    from mlpi.phone import LagGuard, reset_video_message
+    assert reset_video_message() == b"\x11"
+    g = LagGuard(0.5)
+    assert g.decode(0, True, 100.0)
+    assert g.decode(100_000, False, 100.15)         # 50 ms jitter: fine
+    assert not g.decode(200_000, False, 101.0)      # 0.8 s behind: skip
+    assert g.skipping and g.skips == 1
+    assert not g.decode(300_000, False, 101.01)     # still no keyframe
+    assert g.decode(5_000_000, True, 101.02)        # keyframe: live again, new baseline
+    assert g.decode(5_033_000, False, 101.06)
+    assert g.skips == 1
+
+
+def test_lag_guard_restart_forgets_old_timestamps():
+    from mlpi.phone import LagGuard
+    g = LagGuard(0.5)
+    assert g.decode(50_000_000, True, 10.0)
+    g.restart()                                     # rotation: pts start over at 0
+    assert g.decode(0, True, 11.0)
+    assert g.decode(33_000, False, 11.05) and g.skips == 0
+    off = LagGuard(0)                               # max_lag 0 = never skip
+    assert off.decode(0, False, 0.0) and off.decode(0, False, 60.0)

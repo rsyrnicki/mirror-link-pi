@@ -115,7 +115,8 @@ def main(argv: list[str] | None = None) -> int:
         from . import capture, session
         directory = session.current_session_dir() or Path(cfg.session.root)
         directory.mkdir(parents=True, exist_ok=True)
-        capture.capture(cfg.network.interface, directory / f"{cfg.network.interface}.pcap")
+        capture.capture(cfg.network.interface, directory / f"{cfg.network.interface}.pcap",
+                        vnc_port=cfg.network.vnc_port)
         return 0
 
     if args.cmd == "simulate-car":

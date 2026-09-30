@@ -149,6 +149,7 @@ server's output in `phone-server.log`, and the frame rate every 10 s (`phone_fps
 | `dpi` | `120` | density. 120 makes the display count as a tablet, so apps use landscape layouts; higher = larger UI but portrait-only apps get side bars |
 | `max_fps` / `bit_rate` | `30` / `4000000` | lower them if the Zero 2 W can't keep up (see `phone_fps`) |
 | `decoder` | `""` (software) | `h264_v4l2m2m` tries the Pi's hardware decoder (experimental) |
+| `max_lag` | `0.5` | seconds the picture may fall behind the phone before the Pi drops the backlog and asks for a fresh keyframe (0 = never) |
 | `system_decorations` | `false` | Samsung's secondary-display launcher + navigation bar on the virtual display |
 | `keep_active` | `true` | keeps the phone awake while mirroring |
 | `screen_off` | `true` | turns the phone's own screen off (without locking — a locked phone blanks the car screen) |

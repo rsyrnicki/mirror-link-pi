@@ -28,3 +28,25 @@ def test_stages_are_sticky_and_summarised(tmp_path):
     assert [e["stage"] for e in events if e["kind"] == "stage"] == [3, 1]
     summary = (tmp_path / "0003/summary.txt").read_text()
     assert "boot #3" in summary and "FURTHEST STAGE: 3" in summary
+
+
+def test_throttled_flags_decode():
+    from mlpi.health import decode_throttled
+    assert decode_throttled(0x50005) == ["undervoltage now", "throttled now",
+                                         "undervoltage has occurred", "throttling has occurred"]
+    assert decode_throttled(0) == []
+
+
+def test_prune_sessions_keeps_newest_and_their_pcaps(tmp_path):
+    from mlpi.session import prune_sessions
+    for n in range(1, 8):
+        d = tmp_path / f"{n:04d}"
+        d.mkdir()
+        (d / "events.jsonl").write_text("{}")
+        (d / "usb0.pcap").write_bytes(b"x")
+    (tmp_path / "current").symlink_to("0007")
+    prune_sessions(tmp_path, keep=5, keep_pcaps=2, min_free=0)
+    left = sorted(p.name for p in tmp_path.iterdir() if not p.is_symlink())
+    assert left == ["0003", "0004", "0005", "0006", "0007"]
+    assert [p.parent.name for p in sorted(tmp_path.glob("0*/usb0.pcap"))] == ["0006", "0007"]
+    assert (tmp_path / "0003" / "events.jsonl").exists()

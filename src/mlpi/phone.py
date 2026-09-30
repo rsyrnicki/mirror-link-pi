@@ -51,6 +51,7 @@ MSG_INJECT_TOUCH_EVENT = 2
 MSG_BACK_OR_SCREEN_ON = 4
 MSG_SET_DISPLAY_POWER = 10
 MSG_START_APP = 16
+MSG_RESET_VIDEO = 17                # new keyframe (restarts the encoder)
 
 ACTION_DOWN, ACTION_UP, ACTION_MOVE = 0, 1, 2
 POINTER_ID_GENERIC_FINGER = (1 << 64) - 2           # UINT64_C(-2)
@@ -104,6 +105,51 @@ def fit_box(src_w: int, src_h: int, dst_w: int, dst_h: int) -> tuple[int, int, i
 def start_app_message(name: str) -> bytes:
     raw = name.encode()[:255]
     return struct.pack("!BB", MSG_START_APP, len(raw)) + raw
+
+
+def reset_video_message() -> bytes:
+    return struct.pack("!B", MSG_RESET_VIDEO)
+
+
+class LagGuard:
+    """Keeps the picture live when decoding can't keep up.
+
+    The decoder runs in the socket loop, so when it is slower than the phone the video
+    queues up in the TCP buffers and the phone's encoder: the car then shows (and a tap
+    lands on) what the phone did seconds ago, and the delay only grows. Each packet's
+    presentation time (phone clock, µs) is compared with its arrival time; the smallest
+    difference seen is "live". Once a packet is more than ``max_lag`` s behind that,
+    everything up to the next keyframe is dropped undecoded (which drains the queue
+    quickly), and the caller asks the phone for a fresh keyframe.
+    """
+
+    def __init__(self, max_lag: float) -> None:
+        self.max_lag = max_lag
+        self.offset: float | None = None
+        self.skipping = False
+        self.skips = 0
+        self.lag = 0.0
+
+    def restart(self) -> None:
+        """New encoder session (rotation, reset): its timestamps start over."""
+        self.offset = None
+
+    def decode(self, pts_us: int, key: bool, now: float) -> bool:
+        """True = decode this packet; False = drop it."""
+        if self.skipping:
+            if not key:
+                return False
+            self.skipping = False
+            self.offset = None
+        offset = now - pts_us / 1e6
+        if self.offset is None or offset < self.offset:
+            self.offset = offset
+        self.lag = offset - self.offset
+        if self.max_lag > 0 and self.lag > self.max_lag:
+            self.skipping = True
+            self.skips += 1
+            return False
+        return True
 
 
 # ---------- video stream ----------
@@ -736,6 +782,7 @@ class PhoneLink:
             pending_config = b""       # merged into the next frame, as scrcpy's client does
             first = True
             stats_t, stats_frames = time.monotonic(), 0
+            guard = LagGuard(c.max_lag)
 
             def on_frame(data: bytes) -> None:
                 nonlocal first
@@ -785,19 +832,32 @@ class PhoneLink:
                         except Exception as exc:  # noqa: BLE001 - e.g. libavcodec missing
                             raise PhoneDisconnected(f"decoder unavailable: {exc}") from None
                         pending_config = config_packet
+                        guard.restart()
                     elif kind == "packet":
-                        _, is_config, _key, _pts, payload = ev
+                        _, is_config, key, pts, payload = ev
                         if is_config:
                             config_packet = pending_config = payload
                             continue
                         if decoder is None:
                             continue
+                        was_skipping = guard.skipping
+                        if not guard.decode(pts, key, time.monotonic()):
+                            if not was_skipping:
+                                self._event("phone_lag_skip", lag=round(guard.lag, 2),
+                                            skips=guard.skips)
+                                log.info("video %.1f s behind: skipping to a new keyframe",
+                                         guard.lag)
+                                self._send(reset_video_message())
+                            continue
+                        if was_skipping:
+                            pending_config = config_packet
                         decoder.write(pending_config + payload if pending_config else payload)
                         pending_config = b""
                 if decoder and time.monotonic() - stats_t >= 5:
                     fps = (decoder.frames - stats_frames) / (time.monotonic() - stats_t)
                     self._event("phone_fps", fps=round(fps, 1), frames=decoder.frames,
-                                errors=decoder.errors)
+                                errors=decoder.errors, lag=round(guard.lag, 2),
+                                skips=guard.skips)
                     self._set_status(f"streaming {serial} {self._video_size[0]}x"
                                      f"{self._video_size[1]} {fps:.0f} fps")
                     stats_t, stats_frames = time.monotonic(), decoder.frames

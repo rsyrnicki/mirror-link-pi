@@ -178,6 +178,9 @@ def summarise(directory: Path) -> str:
             detail = {k: v for k, v in e.items() if k not in ("t", "wall", "kind", "xml")}
             out.append(f"  t={e['t']} {e['kind']} {detail}")
 
+    out += _phone_section(events)
+    out += _health_section(events, directory)
+
     profile = [e for e in events if e.get("kind") == "client_profile"]
     if profile:
         model = re.search(r"<modelName>([^<]*)", profile[-1].get("xml", ""))
@@ -185,6 +188,72 @@ def summarise(directory: Path) -> str:
         out.append(f"Car client profile: {model.group(1) if model else '?'} "
                    f"({len(profile[-1].get('xml', ''))} bytes)")
     return "\n".join(out)
+
+
+def _phone_section(events: list[dict]) -> list[str]:
+    phone = [e for e in events if str(e.get("kind", "")).startswith("phone_")]
+    if not phone:
+        return []
+    out = ["", "Phone:"]
+    statuses: list[str] = []
+    for e in phone:
+        if e["kind"] == "phone_status" and (not statuses or statuses[-1] != e.get("status")):
+            statuses.append(e.get("status", ""))
+    for s in statuses[:25]:
+        out.append(f"  status: {s}")
+    fps = [e.get("fps", 0) for e in phone if e["kind"] == "phone_fps"]
+    if fps:
+        ordered = sorted(fps)
+        last_errors = next((e.get("errors") for e in reversed(phone)
+                            if e["kind"] == "phone_fps"), 0)
+        out.append(f"  decoded fps: min {ordered[0]} / median {ordered[len(ordered) // 2]} / "
+                   f"max {ordered[-1]} over {len(fps)} samples; last errors {last_errors}")
+    skips = [e for e in phone if e["kind"] == "phone_lag_skip"]
+    if skips:
+        worst = max(e.get("lag", 0) for e in skips)
+        out.append(f"  video fell behind {len(skips)}x (worst {worst} s) and skipped ahead: "
+                   "the Pi can't decode as fast as the phone sends (lower max_fps/bit_rate)")
+    for e in phone:
+        kind = e["kind"]
+        if kind in ("phone_stream_end", "phone_app_list", "phone_open_app", "phone_session"):
+            detail = {k: v for k, v in e.items()
+                      if k not in ("t", "wall", "kind", "mono", "seq", "stdout_head")}
+            out.append(f"  t={e['t']} {kind} {detail}")
+        elif kind == "phone_connectivity":
+            out.append(f"  t={e['t']} phone network state:")
+            out += [f"      {line}" for line in e.get("lines", [])[:15]]
+    return out
+
+
+def _health_section(events: list[dict], directory: Path) -> list[str]:
+    out = []
+    health = [e for e in events if e.get("kind") == "health"]
+    if health:
+        flags = sorted({f for e in health for f in e.get("throttled_flags", [])})
+        temps = [e["temp_c"] for e in health if e.get("temp_c") is not None]
+        loads = [e["load"][0] for e in health if e.get("load")]
+        out += ["", "Pi health:",
+                f"  power/thermal flags seen: {', '.join(flags) if flags else 'none'}",
+                f"  temperature max {max(temps) if temps else '?'} C, "
+                f"load(1m) max {max(loads) if loads else '?'}, "
+                f"lowest free memory {min((e.get('mem_available_mb') or 0) for e in health)} MB"]
+    last = events[-1]
+    ended_cleanly = any(e.get("kind") == "stopped" for e in events)
+    out += ["", f"Session ends at t={last.get('t')} "
+                + ("(mlpi stopped normally)" if ended_cleanly else
+                   "WITHOUT a clean stop: power cut, reboot or freeze")]
+    journal = directory / "journal.txt"
+    try:
+        text = journal.read_bytes().decode("utf-8", "replace")
+    except OSError:
+        text = ""
+    hits = [line.strip()[:200] for line in text.splitlines()
+            if re.search(r"(?i)undervoltage|throttl|out of memory|oom-kill|killed process|"
+                         r"traceback|segfault|watchdog", line)]
+    if hits:
+        out.append("Journal warnings:")
+        out += [f"  {h}" for h in hits[:15]]
+    return out
 
 
 def run(directories: list[Path]) -> int:
