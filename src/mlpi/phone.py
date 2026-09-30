@@ -502,6 +502,28 @@ class PhoneLink:
             self.switch.show(self.launcher.frame)
             self._event("phone_launcher")
 
+    CONNECTIVITY_KEYS = ("Active default network", "NetworkAgentInfo", "everValidated",
+                         "acceptUnvalidated", "explicitlySelected", "mobile_data_always_on")
+
+    def _record_connectivity(self, serial: str) -> None:
+        """Snapshot which network the phone uses for the internet (Wi-Fi to the Pi has
+        none), 20 s after connecting: full dump to phone-connectivity.txt, the key
+        lines as a phone_connectivity event."""
+        if self._stop.wait(20):
+            return
+        dump = self.adb.run("shell", "dumpsys", "connectivity", serial=serial, timeout=30)
+        always_on = self.adb.run("shell", "settings", "get", "global",
+                                 "mobile_data_always_on", serial=serial, timeout=15)
+        text = (dump.stdout or "") + f"\nmobile_data_always_on={always_on.stdout.strip()}\n"
+        if self.session:
+            try:
+                (self.session.directory / "phone-connectivity.txt").write_text(text)
+            except OSError:
+                pass
+        keys = [line.strip()[:300] for line in text.splitlines()
+                if any(k in line for k in self.CONNECTIVITY_KEYS)]
+        self._event("phone_connectivity", lines=keys[:40])
+
     def _load_app_list(self, serial: str) -> None:
         """Ask the phone for its launchable apps (scrcpy's list_apps) for the
         launcher's "All apps" pages. Runs in the background once per connection."""
@@ -695,6 +717,8 @@ class PhoneLink:
             if self.launcher:
                 threading.Thread(target=self._load_app_list, args=(serial,),
                                  name="phone-apps", daemon=True).start()
+            threading.Thread(target=self._record_connectivity, args=(serial,),
+                             name="phone-net", daemon=True).start()
             if c.start_app:
                 self._send(start_app_message(c.start_app))
                 self._show_video_on_frame = True
