@@ -36,7 +36,8 @@ ml_command = false
 # wifi_ssid = "MirrorLink-Pi"
 # wifi_password = "..."          # 8-63 characters
 # wifi_country = "DE"
-# start_app = "com.google.android.apps.maps"   # "" = just the phone's launcher
+# apps = [{name = "Waze", package = "com.waze", colour = "#33ccff"}]   # launcher tiles (max 7)
+# start_app = ""                 # open this app directly instead of the Pi launcher
 # dpi = 120                      # 120 = apps use landscape layouts; bigger = larger UI
 # max_fps = 30
 # bit_rate = 4000000
