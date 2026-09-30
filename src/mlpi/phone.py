@@ -549,12 +549,35 @@ class PhoneLink:
             self._event("phone_launcher")
 
     CONNECTIVITY_KEYS = ("Active default network", "NetworkAgentInfo", "everValidated",
-                         "acceptUnvalidated", "explicitlySelected", "mobile_data_always_on")
+                         "acceptUnvalidated", "explicitlySelected", "mobile_data_always_on",
+                         "Bad Wi-Fi avoidance", "Avoid bad wifi setting")
+
+    def _avoid_bad_wifi(self, serial: str) -> None:
+        """Let mobile data stay the phone's internet while it is on the Pi's Wi-Fi.
+
+        Android's "avoid bad Wi-Fi" (Settings.Global.NETWORK_AVOID_BAD_WIFI) is unset
+        on e.g. the Galaxy A56, which means "get stuck": with the device config that
+        actively prefers bad Wi-Fi, a Wi-Fi without internet becomes the default
+        network and apps lose the internet. 1 = prefer validated mobile data. It is
+        the same switch as "Switch to mobile data automatically" on stock Android;
+        undo with `adb shell settings delete global network_avoid_bad_wifi`.
+        """
+        key = "network_avoid_bad_wifi"
+        before = self.adb.run("shell", "settings", "get", "global", key, serial=serial,
+                              timeout=15).stdout.strip()
+        if before == "1":
+            return
+        put = self.adb.run("shell", "settings", "put", "global", key, "1", serial=serial,
+                           timeout=15)
+        self._event("phone_avoid_bad_wifi", before=before, rc=put.returncode,
+                    stderr=(put.stderr or "")[:200])
 
     def _record_connectivity(self, serial: str) -> None:
         """Snapshot which network the phone uses for the internet (Wi-Fi to the Pi has
         none), 20 s after connecting: full dump to phone-connectivity.txt, the key
         lines as a phone_connectivity event."""
+        if getattr(self.cfg, "avoid_bad_wifi", True):
+            self._avoid_bad_wifi(serial)
         if self._stop.wait(20):
             return
         dump = self.adb.run("shell", "dumpsys", "connectivity", serial=serial, timeout=30)
@@ -753,6 +776,7 @@ class PhoneLink:
                                 stdout=log_file, stderr=subprocess.STDOUT)
         self._procs.append(server)
         decoder: Decoder | None = None
+        decoder_box: tuple[int, int, int, int] | None = None
         video = control = None
         try:
             video = self._connect_video(port, time.monotonic() + 20)
@@ -781,11 +805,13 @@ class PhoneLink:
             config_packet = b""        # SPS/PPS: kept for decoder restarts
             pending_config = b""       # merged into the next frame, as scrcpy's client does
             first = True
-            stats_t, stats_frames = time.monotonic(), 0
+            stats_t, stats_frames, frames = time.monotonic(), 0, 0
+            lag_max = 0.0
             guard = LagGuard(c.max_lag)
 
             def on_frame(data: bytes) -> None:
-                nonlocal first
+                nonlocal first, frames
+                frames += 1
                 if self.launcher:
                     data = self.launcher.paint_home_button(data)
                 self.frame.update(data)
@@ -823,14 +849,19 @@ class PhoneLink:
                         self._video_box = box
                         self._event("phone_session", width=w, height=h, box=list(box))
                         self._set_status(f"streaming {serial} {w}x{h}")
-                        if decoder:
-                            decoder.stop()
-                        try:
-                            full = (self.frame.width, self.frame.height)
-                            decoder = Decoder(box[2], box[3], _compose(on_frame, box, full),
-                                              codec=c.decoder, threads=c.decoder_threads)
-                        except Exception as exc:  # noqa: BLE001 - e.g. libavcodec missing
-                            raise PhoneDisconnected(f"decoder unavailable: {exc}") from None
+                        # Same size (e.g. after a video reset): keep the decoder, the new
+                        # SPS/PPS + keyframe restart it. Only a new size needs a new one.
+                        if decoder is None or box != decoder_box:
+                            if decoder:
+                                decoder.stop()
+                            try:
+                                full = (self.frame.width, self.frame.height)
+                                decoder = Decoder(box[2], box[3],
+                                                  _compose(on_frame, box, full),
+                                                  codec=c.decoder, threads=c.decoder_threads)
+                            except Exception as exc:  # noqa: BLE001 - e.g. no libavcodec
+                                raise PhoneDisconnected(f"decoder unavailable: {exc}") from None
+                            decoder_box = box
                         pending_config = config_packet
                         guard.restart()
                     elif kind == "packet":
@@ -841,7 +872,9 @@ class PhoneLink:
                         if decoder is None:
                             continue
                         was_skipping = guard.skipping
-                        if not guard.decode(pts, key, time.monotonic()):
+                        decode = guard.decode(pts, key, time.monotonic())
+                        lag_max = max(lag_max, guard.lag)
+                        if not decode:
                             if not was_skipping:
                                 self._event("phone_lag_skip", lag=round(guard.lag, 2),
                                             skips=guard.skips)
@@ -854,13 +887,15 @@ class PhoneLink:
                         decoder.write(pending_config + payload if pending_config else payload)
                         pending_config = b""
                 if decoder and time.monotonic() - stats_t >= 5:
-                    fps = (decoder.frames - stats_frames) / (time.monotonic() - stats_t)
-                    self._event("phone_fps", fps=round(fps, 1), frames=decoder.frames,
+                    fps = (frames - stats_frames) / (time.monotonic() - stats_t)
+                    # lag_max: the worst delay behind the phone in these 5 s (Wi-Fi
+                    # hiccups show up here without triggering a skip).
+                    self._event("phone_fps", fps=round(fps, 1), frames=frames,
                                 errors=decoder.errors, lag=round(guard.lag, 2),
-                                skips=guard.skips)
+                                lag_max=round(lag_max, 2), skips=guard.skips)
                     self._set_status(f"streaming {serial} {self._video_size[0]}x"
                                      f"{self._video_size[1]} {fps:.0f} fps")
-                    stats_t, stats_frames = time.monotonic(), decoder.frames
+                    stats_t, stats_frames, lag_max = time.monotonic(), frames, 0.0
         finally:
             with self._control_lock:
                 self._control = None

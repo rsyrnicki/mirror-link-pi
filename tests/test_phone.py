@@ -207,3 +207,24 @@ def test_lag_guard_restart_forgets_old_timestamps():
     assert g.decode(33_000, False, 11.05) and g.skips == 0
     off = LagGuard(0)                               # max_lag 0 = never skip
     assert off.decode(0, False, 0.0) and off.decode(0, False, 60.0)
+
+
+def test_avoid_bad_wifi_is_set_once():
+    calls = []
+    current = {"v": "null"}
+
+    class FakeAdb:
+        def run(self, *args, serial="", timeout=20.0):
+            calls.append(args)
+            if args[1:3] == ("settings", "put"):
+                current["v"] = args[-1]
+            return types.SimpleNamespace(returncode=0, stdout=current["v"] + "\n", stderr="")
+
+    cfg = types.SimpleNamespace(adb="adb", adb_home="", server_jar="/opt/jar", launcher=False)
+    link = ph.PhoneLink(cfg, types.SimpleNamespace(width=800, height=480), switch=None,
+                        adb=FakeAdb())
+    link._avoid_bad_wifi("s")
+    assert ("shell", "settings", "put", "global", "network_avoid_bad_wifi", "1") in calls
+    calls.clear()
+    link._avoid_bad_wifi("s")                       # already 1: only reads
+    assert len(calls) == 1 and calls[0][2] == "get"

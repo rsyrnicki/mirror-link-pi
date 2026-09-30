@@ -92,7 +92,9 @@ size.
 
 1. Plug the Pi into the laptop as for the normal pre-flight.
 2. On the phone, join the Wi-Fi **MirrorLink-Pi** (password from `mlpi.toml`). When Android
-   says the network has no internet, choose to **stay connected**.
+   says the network has no internet, just ignore it. Don't choose **stay connected** /
+   "don't ask again": that makes the Pi's Wi-Fi (which has no internet) the phone's
+   internet connection.
 3. Switch Wireless debugging on.
 4. The Pi's status screen line `PHONE:` shows progress. Once it says `streaming …`, run
    `simulate-car`: its screenshot should show the phone's display.
@@ -149,7 +151,8 @@ server's output in `phone-server.log`, and the frame rate every 10 s (`phone_fps
 | `dpi` | `120` | density. 120 makes the display count as a tablet, so apps use landscape layouts; higher = larger UI but portrait-only apps get side bars |
 | `max_fps` / `bit_rate` | `30` / `4000000` | lower them if the Zero 2 W can't keep up (see `phone_fps`) |
 | `decoder` | `""` (software) | `h264_v4l2m2m` tries the Pi's hardware decoder (experimental) |
-| `max_lag` | `0.5` | seconds the picture may fall behind the phone before the Pi drops the backlog and asks for a fresh keyframe (0 = never) |
+| `max_lag` | `2.0` | seconds the picture may fall behind the phone before the Pi drops the backlog and asks for a fresh keyframe (0 = never) |
+| `avoid_bad_wifi` | `true` | sets Android's "avoid bad Wi-Fi" (`network_avoid_bad_wifi=1`) on the phone so mobile data stays its internet while it is on the Pi's Wi-Fi; undo with `adb shell settings delete global network_avoid_bad_wifi` |
 | `system_decorations` | `false` | Samsung's secondary-display launcher + navigation bar on the virtual display |
 | `keep_active` | `true` | keeps the phone awake while mirroring |
 | `screen_off` | `true` | turns the phone's own screen off (without locking — a locked phone blanks the car screen) |

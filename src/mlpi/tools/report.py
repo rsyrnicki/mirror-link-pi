@@ -208,14 +208,19 @@ def _phone_section(events: list[dict]) -> list[str]:
                             if e["kind"] == "phone_fps"), 0)
         out.append(f"  decoded fps: min {ordered[0]} / median {ordered[len(ordered) // 2]} / "
                    f"max {ordered[-1]} over {len(fps)} samples; last errors {last_errors}")
+        lags = sorted(e["lag_max"] for e in phone if e["kind"] == "phone_fps" and "lag_max" in e)
+        if lags:
+            out.append(f"  delay behind the phone per 5 s: median {lags[len(lags) // 2]} s / "
+                       f"worst {lags[-1]} s")
     skips = [e for e in phone if e["kind"] == "phone_lag_skip"]
     if skips:
         worst = max(e.get("lag", 0) for e in skips)
-        out.append(f"  video fell behind {len(skips)}x (worst {worst} s) and skipped ahead: "
-                   "the Pi can't decode as fast as the phone sends (lower max_fps/bit_rate)")
+        out.append(f"  video fell behind {len(skips)}x (worst {worst} s) and skipped ahead "
+                   "(high Pi load below = decoding too slow; low load = Wi-Fi delays)")
     for e in phone:
         kind = e["kind"]
-        if kind in ("phone_stream_end", "phone_app_list", "phone_open_app", "phone_session"):
+        if kind in ("phone_stream_end", "phone_app_list", "phone_open_app", "phone_session",
+                    "phone_avoid_bad_wifi"):
             detail = {k: v for k, v in e.items()
                       if k not in ("t", "wall", "kind", "mono", "seq", "stdout_head")}
             out.append(f"  t={e['t']} {kind} {detail}")
