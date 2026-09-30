@@ -13,6 +13,8 @@ On the laptop:
   simulate-car   play the recorded VW head-unit handshake against a server, then
                  connect to its VNC server and save a screenshot
   report         summarise a session directory brought back from the car
+  car-view       live window that talks to the Pi exactly like the car (RGB565,
+                 one update request outstanding); clicks become touches
   screenshot     render the status screen to a PNG without any network
   discover       send M-SEARCH and dump replies (debugging)
   pair-phone     pair an Android phone for phone mode (Wireless debugging), with the
@@ -51,6 +53,14 @@ def main(argv: list[str] | None = None) -> int:
                        help="where to save the VNC frame (default: car-view.png)")
     p_sim.add_argument("--attempts", type=int, default=1,
                        help="repeat the handshake N times (exercises variant rotation)")
+
+    p_view = sub.add_parser("car-view",
+                            help="live window that talks to the Pi exactly like the car")
+    p_view.add_argument("--target", default="192.168.7.2", help="the Pi (default 192.168.7.2)")
+    p_view.add_argument("--port", type=int, default=5900)
+    p_view.add_argument("--seconds", type=float, default=0, help="close after N seconds")
+    p_view.add_argument("--no-window", action="store_true",
+                        help="no window: just receive and print the frame rate")
 
     p_probe = sub.add_parser("probe-phone",
                              help="probe a real MirrorLink phone as a reference (Linux, root)")
@@ -124,6 +134,11 @@ def main(argv: list[str] | None = None) -> int:
         return simulate_car.run(
             target=args.target, http_port=args.http_port, callback_ip=args.callback_ip,
             vnc=not args.no_vnc, screenshot=Path(args.screenshot), attempts=args.attempts)
+
+    if args.cmd == "car-view":
+        from .tools import car_view
+        return car_view.run(target=args.target, port=args.port, seconds=args.seconds,
+                            window=not args.no_window)
 
     if args.cmd == "probe-phone":
         from .tools import probe_phone

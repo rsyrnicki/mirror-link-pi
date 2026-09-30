@@ -119,7 +119,7 @@ Details: [`docs/pi-deployment.md`](docs/pi-deployment.md) (SD card),
 | Path | What |
 |---|---|
 | `src/mlpi/` | the server: `dhcp`, `ssdp`, `http_descriptor` + `soap` + `eventing`, `rfb` + `mirrorlink_vnc` + `canvas` + `screen`, `dap`, `variants`, `session`, `capture`, `gadget`, `led`, `runner`; phone mode: `phone` (scrcpy client), `avdecode` (H.264 via libavcodec), `video` (frames + source switch) |
-| `src/mlpi/tools/` | `simulate_car` (recorded VW handshake + VNC client), `probe_phone` (drive a real phone), `phone_tools` (`pair-phone`, `phone-preview`), `report`, `discover` |
+| `src/mlpi/tools/` | `simulate_car` (recorded VW handshake + VNC client), `car_view` (live window that behaves like the car), `probe_phone` (drive a real phone), `phone_tools` (`pair-phone`, `phone-preview`), `report`, `discover` |
 | `config/` | device descriptor template, SCPDs, `variants.toml`, `mlpi.toml.example` |
 | `systemd/` | units started at boot on the Pi |
 | `scripts/` | `prepare-sd.sh`, `collect-logs.sh`, `fetch-spec.sh`, `fetch-scrcpy-server.sh` (laptop); `probe-sai-*` (VW SAI research) |

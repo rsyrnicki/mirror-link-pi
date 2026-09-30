@@ -96,10 +96,17 @@ size.
    "don't ask again": that makes the Pi's Wi-Fi (which has no internet) the phone's
    internet connection.
 3. Switch Wireless debugging on.
-4. To use it like the car, open a VNC viewer on `192.168.7.2:5900` over the USB link
-   and set its colour depth to **16 bit** (Remmina: *High colour (16 bpp)*). The car
-   uses 16-bit; at the viewer's default 24/32-bit the Pi has to convert every frame in
-   Python, which makes the desk test noticeably laggier than the car.
+4. Open the car's view in a window, over the USB link:
+   ```bash
+   sudo apt install python3-tk        # once
+   PYTHONPATH=src python3 -m mlpi car-view
+   ```
+   It talks to the Pi exactly like the head unit (MirrorLink handshake, RGB565, one
+   update request at a time); clicks and drags are touches. Every 5 s it prints
+   updates/s, MB/s and "tap → screen" (press to next picture). Desktop VNC viewers
+   (Remmina, TigerVNC) ask for other colour formats that the Pi has to convert
+   frame by frame in Python, and they pace updates their own way, so they look much
+   laggier than the car ever gets.
 5. The Pi's status screen line `PHONE:` shows progress. Once it says `streaming …`, run
    `simulate-car`: its screenshot should show the phone's display.
 

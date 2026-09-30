@@ -251,11 +251,12 @@ def _read_update(sock: socket.socket, fb: bytearray, width: int,
     return count
 
 
-def vnc_session(app_uri: str, screenshot: Path) -> None:
-    m = re.match(r"(?i)vnc://([^:/]+):(\d+)", app_uri)
-    if not m:
-        raise SimulationError(f"cannot parse AppURI {app_uri!r}")
-    host, port = m.group(1), int(m.group(2))
+def open_mirrorlink_vnc(host: str, port: int, *, verbose: bool = True
+                        ) -> tuple[socket.socket, int, int]:
+    """Connect like the VW head unit: RFB 3.8, MirrorLink display/event configuration,
+    device status, RGB565 pixels. Returns (socket, width, height), ready for update
+    requests."""
+    say = print if verbose else (lambda *a, **k: None)
     sock = socket.create_connection((host, port), timeout=10)
     try:
         version = _recv_exact(sock, 12)
@@ -272,7 +273,7 @@ def vnc_session(app_uri: str, screenshot: Path) -> None:
         _recv_exact(sock, 16)
         (name_len,) = struct.unpack("!I", _recv_exact(sock, 4))
         name = _recv_exact(sock, name_len).decode()
-        print(f"  VNC {version.decode().strip()} '{name}' {width}x{height}")
+        say(f"  VNC {version.decode().strip()} '{name}' {width}x{height}")
         # MirrorLink client flow (Part 2 §6.3, §7.3, §7.4): SetEncodings incl. -523
         # and -524 first, answer the server's display and event configuration, then
         # pick a pixel format the server offered (RGB565) and request a frame.
@@ -282,8 +283,8 @@ def vnc_session(app_uri: str, screenshot: Path) -> None:
         if not pixfmt & ml.PF_RGB565:
             raise SimulationError(f"server does not offer RGB565: 0x{pixfmt:08x}")
         sec = ml.decode_event_configuration(_expect_ml(sock, ml.EXT_SERVER_EVENT_CONFIG))
-        print(f"  MirrorLink VNC: server ML {major}.{minor}, pixel formats 0x{pixfmt:08x}, "
-              f"events {sec['knob_keys']}/{sec['device_keys']}, pointer {sec['pointer_events']}")
+        say(f"  MirrorLink VNC: server ML {major}.{minor}, pixel formats 0x{pixfmt:08x}, "
+            f"events {sec['knob_keys']}/{sec['device_keys']}, pointer {sec['pointer_events']}")
         # ClientDisplayConfiguration: 800x480, 155x93 mm, distance unknown, RGB565.
         sock.sendall(ml.message(ml.EXT_CLIENT_DISPLAY_CONFIG, struct.pack(
             "!BBHHHHHHII", 1, 1, 0, width, height, 155, 93, 0, ml.PF_RGB565, 0)))
@@ -295,9 +296,22 @@ def vnc_session(app_uri: str, screenshot: Path) -> None:
                                 struct.pack("!I", ml.DS_DISABLED << 16)))
         status = ml.decode_device_status(struct.unpack(
             "!I", _expect_ml(sock, ml.EXT_DEVICE_STATUS))[0])
-        print(f"  DeviceStatus: {status}")
+        say(f"  DeviceStatus: {status}")
         pf = struct.pack("!BBBBHHHBBB3x", 16, 16, 0, 1, 31, 63, 31, 11, 5, 0)
         sock.sendall(b"\x00\x00\x00\x00" + pf)
+    except BaseException:
+        sock.close()
+        raise
+    return sock, width, height
+
+
+def vnc_session(app_uri: str, screenshot: Path) -> None:
+    m = re.match(r"(?i)vnc://([^:/]+):(\d+)", app_uri)
+    if not m:
+        raise SimulationError(f"cannot parse AppURI {app_uri!r}")
+    host, port = m.group(1), int(m.group(2))
+    sock, width, height = open_mirrorlink_vnc(host, port)
+    try:
         sock.sendall(struct.pack("!BBHHHH", 3, 0, 0, 0, width, height))
         fb = bytearray(width * height * 3)
         context: list = []
