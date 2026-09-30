@@ -48,6 +48,21 @@ cannot pass the CCC certification check (device attestation needs a CCC-issued k
 - **Your car, your responsibility.** Connecting unofficial devices to a vehicle may
   affect its warranty. Captures in this repo have had vehicle identifiers removed
   (`scripts/scrub-captures.py`).
+- **Phone mode changes settings on your phone over adb, and that can be risky.** It
+  needs Wireless debugging switched on, and the Pi keeps an adb key that grants full
+  shell access to the phone: anyone who has the SD card (or the laptop key in
+  `~/.config/mlpi/adb/`) and can reach the phone's Wireless debugging port can control
+  it. Revoke it any time under *Developer options → Revoke USB debugging
+  authorizations*. While connected, the Pi:
+  - sets Android's "avoid bad Wi-Fi" (`network_avoid_bad_wifi=1`), which **stays set**
+    afterwards (turn off with `avoid_bad_wifi = false`; undo with
+    `adb shell settings delete global network_avoid_bad_wifi`);
+  - copies the scrcpy server into `/data/local/tmp` (`mlpi-scrcpy-list.jar` stays
+    there), creates a virtual display, keeps the phone awake and turns its own screen
+    off until the connection ends.
+
+  Use phone mode only with a phone you own, and switch Wireless debugging off when you
+  don't need it.
 
 ## How it works
 
