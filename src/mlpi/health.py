@@ -47,6 +47,34 @@ def _read(path: str) -> str:
         return ""
 
 
+STATION_KEYS = {
+    "signal": "signal", "tx bitrate": "tx_bitrate", "rx bitrate": "rx_bitrate",
+    "tx retries": "tx_retries", "tx failed": "tx_failed", "inactive time": "inactive",
+}
+
+
+def parse_station_dump(text: str) -> list[dict]:
+    """`iw dev wlan0 station dump`: one dict per connected client (the phone)."""
+    stations: list[dict] = []
+    for line in text.splitlines():
+        if line.startswith("Station "):
+            stations.append({"mac": line.split()[1]})
+        elif stations and ":" in line:
+            key, _, value = line.strip().partition(":")
+            if key in STATION_KEYS:
+                stations[-1][STATION_KEYS[key]] = " ".join(value.split()[:3])
+    return stations
+
+
+def wifi_stations(interface: str = "wlan0") -> list[dict]:
+    try:
+        out = subprocess.run(["iw", "dev", interface, "station", "dump"],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return parse_station_dump(out)
+
+
 def snapshot() -> dict:
     temp = _read("/sys/class/thermal/thermal_zone0/temp")
     mem = {}
@@ -66,8 +94,10 @@ def snapshot() -> dict:
 
 
 class HealthMonitor:
-    def __init__(self, session: Session, *, interval: float = 10.0, every: int = 6) -> None:
+    def __init__(self, session: Session, *, interval: float = 10.0, every: int = 6,
+                 wifi_interface: str = "") -> None:
         self.session = session
+        self.wifi_interface = wifi_interface   # phone hotspot: log its link every interval
         self.interval = interval
         self.every = every
         self._stop = threading.Event()
@@ -84,6 +114,11 @@ class HealthMonitor:
                     log.warning("Pi power/thermal: %s", ", ".join(snap["throttled_flags"]))
                     self.session.note("POWER/THERMAL", ", ".join(snap["throttled_flags"]))
                 last_throttled = snap["throttled"]
+            if self.wifi_interface:
+                # Signal, retries and failures of the phone's Wi-Fi link: a video stall
+                # with a bad link here is the radio, with a good one it is the phone.
+                for station in wifi_stations(self.wifi_interface):
+                    self.session.event("wifi", **station)
             n += 1
             self._stop.wait(self.interval)
 

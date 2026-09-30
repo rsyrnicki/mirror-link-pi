@@ -50,3 +50,20 @@ def test_prune_sessions_keeps_newest_and_their_pcaps(tmp_path):
     assert left == ["0003", "0004", "0005", "0006", "0007"]
     assert [p.parent.name for p in sorted(tmp_path.glob("0*/usb0.pcap"))] == ["0006", "0007"]
     assert (tmp_path / "0003" / "events.jsonl").exists()
+
+
+def test_station_dump_parsing():
+    from mlpi.health import parse_station_dump
+    dump = """Station aa:8b:f6:42:18:cb (on wlan0)
+\tinactive time:\t120 ms
+\trx bytes:\t123456
+\ttx retries:\t42
+\ttx failed:\t3
+\tsignal:  \t-48 [-48] dBm
+\ttx bitrate:\t65.0 MBit/s MCS 7
+\trx bitrate:\t72.2 MBit/s MCS 7 short GI
+"""
+    [st] = parse_station_dump(dump)
+    assert st["mac"] == "aa:8b:f6:42:18:cb"
+    assert st["signal"] == "-48 [-48] dBm" and st["tx_failed"] == "3"
+    assert st["tx_bitrate"] == "65.0 MBit/s MCS" and st["inactive"] == "120 ms"

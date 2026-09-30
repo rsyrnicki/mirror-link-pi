@@ -425,6 +425,9 @@ def hotspot_commands(s: HotspotSettings, exists: bool) -> list[list[str]]:
         "802-11-wireless.mode", "ap",
         "802-11-wireless.band", "bg",
         "802-11-wireless.channel", str(s.channel),
+        # 2 = off. The Pi's Wi-Fi chip saves power by default, which on Raspberry Pis
+        # causes stalls of seconds; the car powers us, so there is nothing to save.
+        "802-11-wireless.powersave", "2",
         "802-11-wireless-security.key-mgmt", "wpa-psk",
         "802-11-wireless-security.proto", "rsn",
         "802-11-wireless-security.pairwise", "ccmp",
@@ -462,6 +465,11 @@ def ensure_hotspot(s: HotspotSettings, *, run=subprocess.run) -> str:
                 return f"{' '.join(cmd[:3])} failed: {(out.stderr or out.stdout).strip()[:200]}"
     except (OSError, subprocess.SubprocessError) as exc:
         return f"hotspot setup failed: {exc}"
+    try:        # belt and braces: the driver's power saving off directly as well
+        run(["iw", "dev", s.interface, "set", "power_save", "off"],
+            capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass    # no iw: NetworkManager's powersave setting above still applies
     return f"hotspot {s.ssid!r} up on {s.interface}"
 
 

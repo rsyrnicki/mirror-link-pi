@@ -217,6 +217,25 @@ def _phone_section(events: list[dict]) -> list[str]:
         worst = max(e.get("lag", 0) for e in skips)
         out.append(f"  video fell behind {len(skips)}x (worst {worst} s) and skipped ahead "
                    "(high Pi load below = decoding too slow; low load = Wi-Fi delays)")
+    wifi = [e for e in events if e["kind"] == "wifi"]
+    if wifi:
+        def num(v) -> float:
+            try:
+                return float(str(v).split()[0])
+            except (ValueError, IndexError):
+                return 0.0
+        sig = [num(e.get("signal")) for e in wifi if e.get("signal")]
+        rates = [num(e.get("tx_bitrate")) for e in wifi if e.get("tx_bitrate")]
+        lo_sig, hi_sig = min(sig, default=0), max(sig, default=0)
+        lo_rate, hi_rate = min(rates, default=0), max(rates, default=0)
+        out.append(f"  phone Wi-Fi link: signal {lo_sig:.0f}..{hi_sig:.0f}"
+                   f" dBm, tx bitrate {lo_rate:.0f}..{hi_rate:.0f}"
+                   f" MBit/s, tx retries {wifi[-1].get('tx_retries')}, "
+                   f"tx failed {wifi[-1].get('tx_failed')} (totals)")
+        for e in skips:
+            near = min(wifi, key=lambda w, t=e["t"]: abs(w["t"] - t))
+            out.append(f"    at the skip t={e['t']}: {near.get('signal')}, "
+                       f"inactive {near.get('inactive')}, tx failed {near.get('tx_failed')}")
     for e in phone:
         kind = e["kind"]
         if kind in ("phone_stream_end", "phone_app_list", "phone_open_app", "phone_session",

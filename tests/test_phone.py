@@ -96,6 +96,7 @@ def test_hotspot_commands_create_then_modify():
     assert settings["802-11-wireless.mode"] == "ap"
     assert settings["ipv4.addresses"] == "192.168.8.1/24"
     assert settings["802-11-wireless-security.psk"] == "secret123"
+    assert settings["802-11-wireless.powersave"] == "2"          # off: avoids stalls
 
 
 def test_ensure_hotspot_refuses_short_password_and_runs_nmcli():
@@ -110,6 +111,13 @@ def test_ensure_hotspot_refuses_short_password_and_runs_nmcli():
     assert "up on wlan0" in ph.ensure_hotspot(s, run=run)
     assert calls[0][:3] == ["raspi-config", "nonint", "do_wifi_country"]
     assert ["nmcli", "connection", "up", "mlpi-hotspot"] in calls
+    assert ["iw", "dev", "wlan0", "set", "power_save", "off"] in calls
+
+    def run_without_iw(cmd, **kw):
+        if cmd[0] == "iw":
+            raise FileNotFoundError("iw")
+        return run(cmd, **kw)
+    assert "up on wlan0" in ph.ensure_hotspot(s, run=run_without_iw)
 
 
 def test_pointer_mapping_scales_to_video_and_sends_down_move_up():

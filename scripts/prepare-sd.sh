@@ -200,7 +200,8 @@ phone_packages() {
     # (python3-av would need ~410 MB and does not fit — see src/mlpi/avdecode.py.)
     local machine arch aptdir codec sws O
     if [[ -x "$ROOT/usr/bin/adb" ]] && compgen -G "$ROOT/usr/lib/*/libavcodec.so.*" >/dev/null \
-            && compgen -G "$ROOT/usr/lib/*/libswscale.so.*" >/dev/null; then
+            && compgen -G "$ROOT/usr/lib/*/libswscale.so.*" >/dev/null \
+            && [[ -x "$ROOT/usr/sbin/iw" ]]; then
         say "adb and libavcodec already in the image"
         return
     fi
@@ -236,7 +237,7 @@ phone_packages() {
     sws="$(chroot "$ROOT" apt-cache "${O[@]}" pkgnames libswscale | grep -E '^libswscale[0-9]+$' | sort -V | tail -1)"
     [[ -n "$codec" && -n "$sws" ]] || die "no libavcodec/libswscale package found in the image's apt sources"
     chroot "$ROOT" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
-        apt-get "${O[@]}" install -y -qq --no-install-recommends adb "$codec" "$sws"
+        apt-get "${O[@]}" install -y -qq --no-install-recommends adb "$codec" "$sws" iw
     cleanup_chroot
     rm -rf "$aptdir"
     rmdir "$ROOT/mlpi-apt" 2>/dev/null || true

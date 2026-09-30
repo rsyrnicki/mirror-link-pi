@@ -295,7 +295,8 @@ def run(cfg: Config) -> int:
     guarded("dap", dap.serve_forever, stop, session)
 
     from .health import HealthMonitor
-    health = HealthMonitor(session)
+    health = HealthMonitor(session, wifi_interface=cfg.phone.interface
+                           if cfg.phone.enabled else "")
     guarded("health", health.run, stop, session)
 
     wifi_dhcp = None
