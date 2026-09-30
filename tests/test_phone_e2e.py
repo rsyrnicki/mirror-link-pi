@@ -174,7 +174,7 @@ def test_phone_video_reaches_the_car_and_touch_reaches_the_phone(tmp_path):
 
     # The scrcpy server was started for our fixed version with a car-sized display.
     popen = next(c for c in adb.calls if c[0] == "popen")
-    assert ph.SCRCPY_VERSION in popen and "new_display=320x200/200" in popen
+    assert ph.SCRCPY_VERSION in popen and "new_display=320x200/120" in popen
     # Control stream: start the app, then the simulator's tap in the middle of the car
     # screen (160,100) → (320,200) on the 640×400 phone display: DOWN then UP.
     ctl = bytes(adb.server.control)

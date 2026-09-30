@@ -146,7 +146,7 @@ server's output in `phone-server.log`, and the frame rate every 10 s (`phone_fps
 | `launcher` | `true` | the Pi's own launcher (below) |
 | `apps` | Google Maps, HERE WeGo, Spotify, Audible, Home Assistant, WhatsApp, Phone | home-page tiles, max 7: `apps = [{name = "Waze", package = "com.waze", colour = "#33ccff"}]` |
 | `start_app` | `""` | open this app directly instead of the launcher |
-| `dpi` | `200` | density: higher = larger UI on the car screen |
+| `dpi` | `120` | density. 120 makes the display count as a tablet, so apps use landscape layouts; higher = larger UI but portrait-only apps get side bars |
 | `max_fps` / `bit_rate` | `30` / `4000000` | lower them if the Zero 2 W can't keep up (see `phone_fps`) |
 | `decoder` | `""` (software) | `h264_v4l2m2m` tries the Pi's hardware decoder (experimental) |
 | `system_decorations` | `false` | Samsung's secondary-display launcher + navigation bar on the virtual display |

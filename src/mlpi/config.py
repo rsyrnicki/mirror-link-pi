@@ -140,7 +140,9 @@ class PhoneConfig:
     legacy_port: int = 5555              # also try `adb tcpip` mode; 0 = don't
     server_jar: str = "/opt/mlpi/vendor/scrcpy-server"
     # Video: a new virtual display on the phone, exactly the car's screen size.
-    dpi: int = 200                       # higher = bigger UI on the car screen
+    # 120 dpi makes 800x480 px count as a 1067x640 dp "tablet": apps then offer their
+    # landscape layouts (at 200 dpi, portrait-only apps like Audible showed pillarboxed).
+    dpi: int = 120
     max_fps: int = 30
     bit_rate: int = 4_000_000
     # The Pi draws its own launcher (tiles for `apps`, a Home button over the video).
