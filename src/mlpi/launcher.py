@@ -196,11 +196,17 @@ Target = tuple[str, object]
 class Launcher:
     """Home page, all-apps pages, and the Home button overlaid on the phone's video."""
 
-    HOME_SIZE = 64          # px, the Home button in the video's bottom-left corner
-    HOME_MARGIN = 6
+    HOME_W, HOME_H = 44, 64  # px, the Home button overlaid on the phone's video
+    HOME_MARGIN = 4
+    HOME_POSITIONS = ("right", "left", "top-left", "top-right", "bottom-left",
+                      "bottom-right", "off")
     TOP = 64                # header height
 
-    def __init__(self, frame: VideoFrame, favourites: list[App]) -> None:
+    def __init__(self, frame: VideoFrame, favourites: list[App], *,
+                 home_button: str = "right") -> None:
+        if home_button not in self.HOME_POSITIONS:
+            raise ValueError(f"home_button must be one of {self.HOME_POSITIONS}")
+        self.home_position = home_button
         self.frame = frame
         self.favourites = favourites
         self.visible_favourites = list(favourites)   # narrowed once the app list is known
@@ -311,18 +317,66 @@ class Launcher:
                 self.targets.append((box, ("app", app)))
         self.frame.update(bytes(buf))
 
-    def paint_home_button(self, frame: bytes) -> bytes:
-        """Draw the Home button onto a video frame (bottom-left corner)."""
-        buf = bytearray(frame)
+    @property
+    def home_rect(self) -> tuple[int, int, int, int] | None:
+        """(x, y, w, h) of the Home button on the video, None when switched off.
+        "left"/"right" = the middle of that edge, where apps rarely put controls."""
+        pos = self.home_position
+        if pos == "off":
+            return None
+        w, h, m = self.HOME_W, self.HOME_H, self.HOME_MARGIN
+        x = m if "left" in pos else self.width - w - m
+        if pos in ("left", "right"):
+            y = (self.height - h) // 2
+        else:
+            y = m if pos.startswith("top") else self.height - h - m
+        return x, y, w, h
+
+    def _draw_home_button(self, buf: bytearray) -> None:
+        rect = self.home_rect
+        if rect is None:
+            return
+        x, y, w, h = rect
         p = Painter(buf, self.width, self.height)
-        s, m = self.HOME_SIZE, self.HOME_MARGIN
-        x, y = m, self.height - s - m
-        p.rounded(x, y, s, s, 14, "#202830")
-        cx = x + s // 2
-        for i in range(12):                                   # roof
-            p.rect(cx - 2 - i * 2, y + 14 + i, 4 + i * 4, 1, TEXT)
-        p.rect(cx - 16, y + 26, 32, 22, TEXT)                 # house
-        p.rect(cx - 5, y + 36, 10, 12, "#202830")             # door
+        p.rounded(x, y, w, h, 12, "#202830")
+        cx, top = x + w // 2, y + (h - 28) // 2
+        for i in range(8):                                    # roof
+            p.rect(cx - 2 - i * 2, top + i, 4 + i * 4, 1, TEXT)
+        p.rect(cx - 11, top + 8, 22, 20, TEXT)                # house
+        p.rect(cx - 4, top + 18, 8, 10, "#202830")            # door
+
+    def home_button_runs(self) -> list[tuple[int, bytes]]:
+        """The button as (byte offset, bytes) runs, one per row, drawn once.
+
+        Drawing it with Painter on every video frame costs ~8 ms on the Pi; copying
+        these runs in costs almost nothing. Drawn on a black and on a white frame: the
+        bytes that agree are the button (the rounded corners leave the video visible).
+        """
+        if getattr(self, "_home_runs", None) is None:
+            runs: list[tuple[int, bytes]] = []
+            rect = self.home_rect
+            if rect is not None:
+                black = bytearray(self.width * self.height * 2)
+                white = bytearray(b"\xff" * len(black))
+                self._draw_home_button(black)
+                self._draw_home_button(white)
+                stride = self.width * 2
+                x, y, w, h = rect
+                for row in range(y, y + h):
+                    o = row * stride
+                    same = [i for i in range(2 * x, 2 * (x + w), 2)
+                            if black[o + i:o + i + 2] == white[o + i:o + i + 2]]
+                    if same:
+                        a, b = o + same[0], o + same[-1] + 2
+                        runs.append((a, bytes(black[a:b])))
+            self._home_runs = runs
+        return self._home_runs
+
+    def paint_home_button(self, frame: bytes) -> bytes:
+        """Draw the Home button onto a video frame."""
+        buf = bytearray(frame)
+        for offset, run in self.home_button_runs():
+            buf[offset:offset + len(run)] = run
         return bytes(buf)
 
     # ----- hit testing -----
@@ -334,5 +388,8 @@ class Launcher:
         return None
 
     def in_home_button(self, x: int, y: int) -> bool:
-        s, m = self.HOME_SIZE, self.HOME_MARGIN
-        return m <= x < m + s and self.height - s - m <= y < self.height - m
+        rect = self.home_rect
+        if rect is None:
+            return False
+        bx, by, bw, bh = rect
+        return bx <= x < bx + bw and by <= y < by + bh

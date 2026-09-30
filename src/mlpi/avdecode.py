@@ -95,11 +95,25 @@ class _FrameHead(ctypes.Structure):
 
 class AvDecoder:
     """Decode H.264 access units; each decoded picture comes back as RGB565LE bytes
-    scaled to ``width``×``height``."""
+    scaled to ``width``×``height``.
 
-    def __init__(self, width: int, height: int, *, codec: str = "h264", threads: int = 1) -> None:
+    ``canvas=(full_w, full_h, x, y)`` places the picture at x, y inside a black
+    full_w×full_h frame instead (black bars for portrait apps): libswscale writes into
+    the bigger buffer directly, so this costs nothing extra. ``overlay`` is a list of
+    (byte offset, bytes) runs stamped onto every picture (the launcher's Home button),
+    also without copying the frame.
+    """
+
+    def __init__(self, width: int, height: int, *, codec: str = "h264", threads: int = 1,
+                 canvas: tuple[int, int, int, int] | None = None,
+                 overlay: list[tuple[int, bytes]] | None = None) -> None:
         self.lib = _Libs.get()
+        self.overlay = overlay or []
         self.width, self.height = width, height
+        full_w, full_h, x, y = canvas or (width, height, 0, 0)
+        if not (0 <= x and 0 <= y and x + width <= full_w and y + height <= full_h):
+            raise ValueError(f"{width}x{height} at {x},{y} does not fit {full_w}x{full_h}")
+        self.out_bytes = full_w * full_h * 2
         c = self.lib.avcodec
         decoder = c.avcodec_find_decoder_by_name((codec or "h264").encode())
         if not decoder:
@@ -113,9 +127,10 @@ class AvDecoder:
         self.pkt = _VP(c.av_packet_alloc())
         self.frame = _VP(self.lib.avutil.av_frame_alloc())
         self.sws: int | None = None
-        self.out = ctypes.create_string_buffer(width * height * 2 + PADDING)
-        self._dst = (_VP * 4)(ctypes.cast(self.out, _VP).value, None, None, None)
-        self._dst_stride = (_INT * 4)(width * 2, 0, 0, 0)
+        self.out = ctypes.create_string_buffer(self.out_bytes + PADDING)   # zeroed = black
+        start = ctypes.cast(self.out, _VP).value + (y * full_w + x) * 2
+        self._dst = (_VP * 4)(start, None, None, None)
+        self._dst_stride = (_INT * 4)(full_w * 2, 0, 0, 0)
 
     def decode(self, data: bytes) -> list[bytes]:
         """Feed one access unit; returns the pictures it completed (usually one)."""
@@ -149,7 +164,10 @@ class AvDecoder:
         self.lib.swscale.sws_scale(self.sws, ctypes.addressof(head.data),
                                    ctypes.addressof(head.linesize), 0, head.height,
                                    self._dst, self._dst_stride)
-        return self.out.raw[:self.width * self.height * 2]
+        base = ctypes.addressof(self.out)
+        for offset, run in self.overlay:
+            ctypes.memmove(base + offset, run, len(run))
+        return ctypes.string_at(self.out, self.out_bytes)
 
     def close(self) -> None:
         if self.ctx:

@@ -43,6 +43,7 @@ ml_command = false
 # bit_rate = 4000000
 # decoder = ""                   # "h264_v4l2m2m" = try the Pi's hardware decoder
 # max_lag = 2.0                  # s behind the phone before skipping to a new keyframe
+# home_button = "right"         # right | left | top-left | top-right | bottom-left | bottom-right | off
 
 [dhcp]
 client_address = "192.168.7.44"   # what the car gets (same as all earlier sessions)

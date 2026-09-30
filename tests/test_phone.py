@@ -149,10 +149,6 @@ def test_display_power_matches_scrcpy_test_vector():
 def test_portrait_app_is_pillarboxed_and_touches_map_into_it():
     assert ph.fit_box(800, 480, 800, 480) == (0, 0, 800, 480)
     assert ph.fit_box(480, 800, 800, 480) == (256, 0, 288, 480)
-    got = []
-    compose = ph._compose(got.append, (2, 0, 2, 2), (6, 2))
-    compose(b"AABBCCDD")                         # 2x2 picture, 2 bytes per pixel
-    assert got == [b"\0\0\0\0AABB\0\0\0\0" + b"\0\0\0\0CCDD\0\0\0\0"]
 
     sent = []
     frame = types.SimpleNamespace(width=800, height=480)
@@ -228,3 +224,9 @@ def test_avoid_bad_wifi_is_set_once():
     calls.clear()
     link._avoid_bad_wifi("s")                       # already 1: only reads
     assert len(calls) == 1 and calls[0][2] == "get"
+
+
+def test_fit_box_width_is_simd_safe():
+    for src in ((480, 800), (720, 1600), (1080, 2340), (600, 1024)):
+        x, _y, w, _h = ph.fit_box(*src, 800, 480)
+        assert w % 16 == 0 and 2 * x + w <= 800

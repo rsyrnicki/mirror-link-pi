@@ -185,3 +185,28 @@ def test_phone_video_reaches_the_car_and_touch_reaches_the_phone(tmp_path):
     decoded = [(m[1], struct.unpack_from("!iiHH", m, 10)) for m in msgs]
     assert decoded == [(ph.ACTION_DOWN, (320, 200, PHONE_W, PHONE_H)),
                        (ph.ACTION_UP, (320, 200, PHONE_W, PHONE_H))]
+
+
+def test_decoder_draws_portrait_picture_with_bars_and_overlay(tmp_path):
+    from mlpi.avdecode import AvDecoder
+    full_w, full_h, x, w, h = 64, 24, 16, 32, 24     # widths as fit_box makes them
+    run = (5 * full_w + 1) * 2, b"\x34\x12" * 3          # 3 pixels at (1, 5)
+    dec = AvDecoder(w, h, canvas=(full_w, full_h, x, 0), overlay=[run])
+    try:
+        pictures = [p for au in _test_stream(tmp_path)[:3] for p in dec.decode(au)]
+    finally:
+        dec.close()
+    assert pictures and all(len(p) == full_w * full_h * 2 for p in pictures)
+    pic = pictures[-1]
+    rows = [pic[r * full_w * 2:(r + 1) * full_w * 2] for r in range(full_h)]
+    assert all(row[x * 2 + 2 * w:] == bytes(2 * (full_w - x - w)) for row in rows)  # right bar
+    assert rows[0][:x * 2] == bytes(x * 2)                                     # left bar
+    assert rows[5][2:8] == b"\x34\x12" * 3                                     # overlay
+    assert any(any(row[x * 2:(x + w) * 2]) for row in rows)                    # picture
+
+
+def test_decoder_rejects_a_picture_outside_the_canvas():
+    from mlpi.avdecode import AvDecoder
+    with pytest.raises(ValueError):
+        AvDecoder(30, 24, canvas=(40, 24, 20, 0))
+

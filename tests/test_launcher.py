@@ -94,8 +94,10 @@ def test_tap_flow_tile_opens_app_home_button_returns():
     router.on_pointer(400, 200, 1)
     router.on_pointer(400, 200, 0)
     assert [m[1] for m in sent[1:]] == [ph.ACTION_DOWN, ph.ACTION_UP]
-    # … the Home button (bottom-left) does not; it brings the tiles back.
-    hx, hy = 30, 450
+    # … the Home button (middle of the right edge) does not; it brings the tiles back.
+    bx, by, bw, bh = link.launcher.home_rect
+    hx, hy = bx + bw // 2, by + bh // 2
+    assert hx > 700 and 200 < hy < 280
     assert link.launcher.in_home_button(hx, hy)
     router.on_pointer(hx, hy, 1)
     router.on_pointer(hx, hy, 0)
@@ -112,8 +114,12 @@ def test_home_button_is_painted_on_video_frames():
     launcher = Launcher(VideoFrame(800, 480), list(DEFAULT_APPS))
     black = bytes(800 * 480 * 2)
     painted = launcher.paint_home_button(black)
-    px = struct.unpack_from("<H", painted, (450 * 800 + 38) * 2)[0]
+    bx, by, bw, bh = launcher.home_rect
+    px = struct.unpack_from("<H", painted, ((by + bh // 2) * 800 + bx + 2) * 2)[0]
     assert painted != black and px != 0
+    ref = bytearray(black)
+    launcher._draw_home_button(ref)
+    assert painted == bytes(ref)                                   # cached runs = drawing
     assert painted[(100 * 800 + 400) * 2:(100 * 800 + 401) * 2] == b"\0\0"   # rest untouched
 
 
@@ -124,3 +130,17 @@ def test_favourites_not_installed_are_hidden_once_the_app_list_is_known():
     apps = [t[1].name for _b, t in launcher.targets if t[0] == "app"]
     assert apps == ["Spotify", "Phone"]
     assert ("all", None) in [t for _b, t in launcher.targets]
+
+
+def test_home_button_positions():
+    corners = {}
+    for pos in ("left", "right", "top-left", "top-right", "bottom-left", "bottom-right"):
+        launcher = Launcher(VideoFrame(800, 480), [], home_button=pos)
+        x, y, w, h = launcher.home_rect
+        assert 0 <= x and x + w <= 800 and 0 <= y and y + h <= 480
+        corners[pos] = (x < 400, y < 240 - h // 2, y > 240 - h // 2)
+    assert corners["top-right"][:2] == (False, True)
+    assert corners["bottom-left"] == (True, False, True)
+    off = Launcher(VideoFrame(800, 480), [], home_button="off")
+    assert off.home_rect is None and off.home_button_runs() == []
+    assert not off.in_home_button(780, 240)

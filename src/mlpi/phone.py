@@ -98,6 +98,10 @@ def fit_box(src_w: int, src_h: int, dst_w: int, dst_h: int) -> tuple[int, int, i
     (x, y, w, h). A portrait app on the landscape car screen gets black side bars."""
     scale = min(dst_w / src_w, dst_h / src_h)
     w = max(2, min(dst_w, round(src_w * scale)) // 2 * 2)
+    if w < dst_w:
+        # A multiple of 16: libswscale writes whole SIMD blocks and would spill a few
+        # pixels of picture into the right-hand bar otherwise.
+        w = max(16, w // 16 * 16)
     h = max(2, min(dst_h, round(src_h * scale)) // 2 * 2)
     return (dst_w - w) // 2, (dst_h - h) // 2, w, h
 
@@ -216,9 +220,12 @@ class Decoder:
     """
 
     def __init__(self, width: int, height: int, on_frame: Callable[[bytes], None], *,
-                 codec: str = "", threads: int = 1) -> None:
+                 codec: str = "", threads: int = 1,
+                 canvas: tuple[int, int, int, int] | None = None,
+                 overlay: list[tuple[int, bytes]] | None = None) -> None:
         from .avdecode import AvDecoder
-        self.av = AvDecoder(width, height, codec=codec or "h264", threads=threads)
+        self.av = AvDecoder(width, height, codec=codec or "h264", threads=threads,
+                            canvas=canvas, overlay=overlay)
         self.on_frame = on_frame
         self.frames = 0
         self.errors = 0
@@ -464,26 +471,6 @@ class PhoneDisconnected(Exception):
     pass
 
 
-def _compose(on_frame: Callable[[bytes], None], box: tuple[int, int, int, int],
-             full: tuple[int, int] | None = None):
-    """Wrap ``on_frame`` so pictures of size box[2]×box[3] are placed into the full
-    frame at box[0], box[1] (black around). Identity when the box is the full frame."""
-    bx, by, bw, bh = box
-    if bx == 0 and by == 0:
-        return on_frame
-
-    def composed(data: bytes) -> None:
-        fw = bw + 2 * bx if full is None else full[0]
-        fh = bh + 2 * by if full is None else full[1]
-        buf = bytearray(fw * fh * 2)
-        row = bw * 2
-        for y in range(bh):
-            o = ((by + y) * fw + bx) * 2
-            buf[o:o + row] = data[y * row:(y + 1) * row]
-        on_frame(bytes(buf))
-    return composed
-
-
 class PhoneLink:
     """Finds the phone, runs scrcpy and feeds the decoded video into ``frame``."""
 
@@ -511,7 +498,8 @@ class PhoneLink:
         self.launcher = None
         if getattr(cfg, "launcher", False) and switch is not None:
             from .launcher import Launcher, parse_apps
-            self.launcher = Launcher(switch.new_video_frame(), parse_apps(cfg.apps))
+            self.launcher = Launcher(switch.new_video_frame(), parse_apps(cfg.apps),
+                                     home_button=getattr(cfg, "home_button", "right"))
         self._tile_press: tuple[int, int] | None = None
         self._home_press = False
         self._show_video_on_frame = False
@@ -812,8 +800,6 @@ class PhoneLink:
             def on_frame(data: bytes) -> None:
                 nonlocal first, frames
                 frames += 1
-                if self.launcher:
-                    data = self.launcher.paint_home_button(data)
                 self.frame.update(data)
                 if first:
                     first = False
@@ -855,10 +841,14 @@ class PhoneLink:
                             if decoder:
                                 decoder.stop()
                             try:
-                                full = (self.frame.width, self.frame.height)
-                                decoder = Decoder(box[2], box[3],
-                                                  _compose(on_frame, box, full),
-                                                  codec=c.decoder, threads=c.decoder_threads)
+                                # Portrait apps: libswscale draws the picture straight
+                                # into the middle of a black full-size frame.
+                                canvas = (self.frame.width, self.frame.height, box[0], box[1])
+                                overlay = (self.launcher.home_button_runs()
+                                           if self.launcher else None)
+                                decoder = Decoder(box[2], box[3], on_frame, canvas=canvas,
+                                                  overlay=overlay, codec=c.decoder,
+                                                  threads=c.decoder_threads)
                             except Exception as exc:  # noqa: BLE001 - e.g. no libavcodec
                                 raise PhoneDisconnected(f"decoder unavailable: {exc}") from None
                             decoder_box = box

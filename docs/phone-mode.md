@@ -96,7 +96,11 @@ size.
    "don't ask again": that makes the Pi's Wi-Fi (which has no internet) the phone's
    internet connection.
 3. Switch Wireless debugging on.
-4. The Pi's status screen line `PHONE:` shows progress. Once it says `streaming …`, run
+4. To use it like the car, open a VNC viewer on `192.168.7.2:5900` over the USB link
+   and set its colour depth to **16 bit** (Remmina: *High colour (16 bpp)*). The car
+   uses 16-bit; at the viewer's default 24/32-bit the Pi has to convert every frame in
+   Python, which makes the desk test noticeably laggier than the car.
+5. The Pi's status screen line `PHONE:` shows progress. Once it says `streaming …`, run
    `simulate-car`: its screenshot should show the phone's display.
 
 ## In the car
@@ -153,6 +157,7 @@ server's output in `phone-server.log`, and the frame rate every 10 s (`phone_fps
 | `decoder` | `""` (software) | `h264_v4l2m2m` tries the Pi's hardware decoder (experimental) |
 | `max_lag` | `2.0` | seconds the picture may fall behind the phone before the Pi drops the backlog and asks for a fresh keyframe (0 = never) |
 | `avoid_bad_wifi` | `true` | sets Android's "avoid bad Wi-Fi" (`network_avoid_bad_wifi=1`) on the phone so mobile data stays its internet while it is on the Pi's Wi-Fi; undo with `adb shell settings delete global network_avoid_bad_wifi` |
+| `home_button` | `"right"` | where the Pi's Home button sits on the phone video: `right` / `left` (middle of that edge), `top-left`, `top-right`, `bottom-left`, `bottom-right`, or `off` |
 | `system_decorations` | `false` | Samsung's secondary-display launcher + navigation bar on the virtual display |
 | `keep_active` | `true` | keeps the phone awake while mirroring |
 | `screen_off` | `true` | turns the phone's own screen off (without locking — a locked phone blanks the car screen) |
