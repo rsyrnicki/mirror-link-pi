@@ -311,7 +311,9 @@ def vnc_session(app_uri: str, screenshot: Path) -> None:
         sock.sendall(struct.pack("!BBHH", 5, 1, width // 2, height // 2))
         sock.sendall(struct.pack("!BBHH", 5, 0, width // 2, height // 2))
         time.sleep(1.2)
-        sock.sendall(struct.pack("!BBHHHH", 3, 1, 0, 0, width, height))
+        # Full (non-incremental) request: an incremental one is only answered once the
+        # screen changes, and a tap on an empty spot of the launcher changes nothing.
+        sock.sendall(struct.pack("!BBHHHH", 3, 0, 0, 0, width, height))
         _read_update(sock, fb, width)
         # Intentional termination (§5.3): ByeBye, server answers ByeBye.
         sock.sendall(ml.byebye())
