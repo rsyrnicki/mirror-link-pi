@@ -61,6 +61,9 @@ POINTER_ID_GENERIC_FINGER = (1 << 64) - 2           # UINT64_C(-2)
 
 KEYCODE_HOME, KEYCODE_BACK, KEYCODE_DPAD_CENTER = 3, 4, 23
 MEDIA_KEYCODES = {"play_pause": 85, "next": 87, "previous": 88}   # KEYCODE_MEDIA_*
+# `cmd media_session dispatch` names: delivered to the app that is playing, whatever
+# display it is on (key events injected into the virtual display don't reach it).
+MEDIA_DISPATCH = {"play_pause": "play-pause", "next": "next", "previous": "previous"}
 
 # The car's rotary knob (MirrorLink Part 2, Annex B Table B.1, knob 0).
 KNOB_RIGHT, KNOB_LEFT, KNOB_UP, KNOB_DOWN = 0x30000000, 0x30000001, 0x30000002, 0x30000005
@@ -719,6 +722,18 @@ class PhoneLink:
                     return
                 self.launcher.tick()
 
+    def _media_key(self, key: str) -> None:
+        """Play/pause, next, previous for the app that is playing. Falls back to a key
+        event on the phone's main display if media_session isn't available."""
+        out = self.adb.run("shell", "cmd", "media_session", "dispatch", MEDIA_DISPATCH[key],
+                           serial=self._serial, timeout=10)
+        ok = out.returncode == 0 and "error" not in (out.stdout + out.stderr).lower()
+        if not ok:
+            out = self.adb.run("shell", "input", "-d", "0", "keyevent",
+                               str(MEDIA_KEYCODES[key]), serial=self._serial, timeout=10)
+        self._event("phone_media_key", key=key, via="media_session" if ok else "keyevent",
+                    rc=out.returncode, output=(out.stdout + out.stderr)[:200])
+
     def _set_dnd(self, on: bool) -> None:
         out = self.adb.run("shell", "cmd", "notification", "set_dnd", "on" if on else "off",
                            serial=self._serial, timeout=15)
@@ -786,10 +801,8 @@ class PhoneLink:
         elif kind == "next":
             launcher.go(launcher.page + 1)
         elif kind == "media":
-            keycode = MEDIA_KEYCODES[value]
-            self._send(keycode_message(ACTION_DOWN, keycode))
-            self._send(keycode_message(ACTION_UP, keycode))
-            self._event("phone_media_key", key=value)
+            threading.Thread(target=self._media_key, args=(value,), name="phone-media",
+                             daemon=True).start()
         elif kind == "dnd":
             on = not launcher.state.dnd
             launcher.set_state(dnd=on)                # show it at once; the poll confirms
@@ -896,11 +909,18 @@ class PhoneLink:
             if last:
                 targets.append(f"{ip}:{last}")
             self._set_status(f"looking for wireless debugging on {ip}")
-            targets += [f"{h}:{p}" for h, p in discover_adb_tls(
+            announced = [f"{h}:{p}" for h, p in discover_adb_tls(
                 self.cfg.interface, self.local_ip) if h == ip]
-            found = self._try_targets(targets)
+            found = self._try_targets(targets + announced)
             if found:
                 return found
+            if announced and self.pairing and \
+                    time.monotonic() >= self._pairing_dismissed_until:
+                # Wireless debugging is on (the phone announced it) but refuses our
+                # key: it doesn't know this Pi. Ask for pairing right away.
+                self._show_pairing(ip)
+                self._offer_pairing(ip)
+                continue
             # mDNS got no answer (screen off?): look for the port directly, at most
             # every 30 s so the phone isn't kept busy.
             if self._offer_pairing(ip):
@@ -914,6 +934,9 @@ class PhoneLink:
                 found = self._try_targets([f"{ip}:{p}" for p in ports[:10]])
                 if found:
                     return found
+                if ports and self.pairing and \
+                        time.monotonic() >= self._pairing_dismissed_until:
+                    self._show_pairing(ip)                 # debugging on, key refused
         if self.status.startswith("looking"):
             self._set_status("phone on Wi-Fi, but wireless debugging is off")
         if ips and self._unreachable_since is None:

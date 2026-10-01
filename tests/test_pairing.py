@@ -101,3 +101,24 @@ def test_failed_pairing_keeps_the_page_with_a_message():
     link._pair("192.168.8.44", "37001", "000000")
     assert switch.showing(link.pairing.frame)
     assert "FAILED" in link.pairing.message and link.pairing.code == ""
+
+
+def test_pairing_page_appears_at_once_when_debugging_is_on_but_key_refused(monkeypatch):
+    class FakeAdb:
+        def devices(self):
+            return []
+
+        def connect(self, target):
+            return False                     # TLS: the phone doesn't know our key
+
+    switch = DisplaySwitch(Canvas(800, 480))
+    cfg = types.SimpleNamespace(adb="adb", adb_home="", interface="wlan0", launcher=False,
+                                legacy_port=0)
+    link = ph.PhoneLink(cfg, switch.new_video_frame(), switch, adb=FakeAdb(),
+                        candidates=lambda: ["192.168.8.44"])
+    monkeypatch.setattr(ph, "discover_adb_tls",
+                        lambda *a, service=ph.ADB_TLS_SERVICE, **k:
+                        [("192.168.8.44", 41749)] if service == ph.ADB_TLS_SERVICE else [])
+    monkeypatch.setattr(ph, "scan_open_ports", lambda *a, **k: [])
+    assert link._find_device() == ""
+    assert switch.showing(link.pairing.frame)                 # no 20 s wait

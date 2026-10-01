@@ -173,18 +173,43 @@ def test_status_bar_buttons_control_the_phone():
         link.on_pointer(*_center(box), 1)
         link.on_pointer(*_center(box), 0)
 
-    tap(("media", "play_pause"))
-    assert sent == [ph.keycode_message(ph.ACTION_DOWN, 85), ph.keycode_message(ph.ACTION_UP, 85)]
-    sent.clear()
+    def wait_for(n):
+        for _ in range(100):
+            if len(adb_calls) >= n:
+                return
+            time.sleep(0.01)
+
+    tap(("media", "play_pause"))                  # to the playing app, not the display
+    wait_for(1)
+    assert adb_calls == [("shell", "cmd", "media_session", "dispatch", "play-pause")]
+    assert sent == []
+    adb_calls.clear()
     tap(("screen", None))
     assert sent == [ph.display_power_message(True)] and link.launcher.state.screen_on
     tap(("dnd", None))
     assert link.launcher.state.dnd is True
-    for _ in range(50):
-        if adb_calls:
-            break
-        time.sleep(0.01)
+    wait_for(1)
     assert adb_calls == [("shell", "cmd", "notification", "set_dnd", "on")]
+
+
+def test_media_key_falls_back_to_a_key_event():
+    import types
+
+    import mlpi.phone as ph
+    calls = []
+
+    class FakeAdb:
+        def run(self, *args, serial="", timeout=20.0):
+            calls.append(args)
+            failed = args[1] == "cmd"
+            return types.SimpleNamespace(returncode=1 if failed else 0, stdout="",
+                                         stderr="Error: unknown command" if failed else "")
+
+    cfg = types.SimpleNamespace(adb="adb", adb_home="", launcher=False)
+    link = ph.PhoneLink(cfg, types.SimpleNamespace(width=800, height=480), switch=None,
+                        adb=FakeAdb())
+    link._media_key("next")
+    assert calls[1] == ("shell", "input", "-d", "0", "keyevent", "87")
 
 
 def test_knob_moves_the_highlight_and_push_opens():
