@@ -206,17 +206,19 @@ GREEN, AMBER, RED = "#43a047", "#f9a825", "#e53935"
 class Launcher:
     """Home page, all-apps pages, and the Home button overlaid on the phone's video."""
 
-    HOME_W, HOME_H = 44, 64  # px, the Home button overlaid on the phone's video
+    HOME_W, HOME_H = 44, 64  # px, each button overlaid on the phone's video
     HOME_MARGIN = 4
+    NAV_GAP = 6              # between the Back and the Home button
     HOME_POSITIONS = ("right", "left", "top-left", "top-right", "bottom-left",
                       "bottom-right", "off")
     TOP = 64                # header height
 
     def __init__(self, frame: VideoFrame, favourites: list[App], *,
-                 home_button: str = "right") -> None:
+                 home_button: str = "right", back_button: bool = True) -> None:
         if home_button not in self.HOME_POSITIONS:
             raise ValueError(f"home_button must be one of {self.HOME_POSITIONS}")
         self.home_position = home_button
+        self.back_button = back_button
         self.frame = frame
         self.favourites = favourites
         self.visible_favourites = list(favourites)   # narrowed once the app list is known
@@ -224,6 +226,7 @@ class Launcher:
         self.width, self.height = frame.width, frame.height
         self.page = -1                     # -1 = home page, 0.. = all-apps pages
         self.status = ""
+        self.notice = ""                   # warning line at the bottom of the home page
         self.state = PhoneState()
         self.targets: list[tuple[tuple[int, int, int, int], Target]] = []
         self._lock = threading.RLock()      # drawn from the input and the polling thread
@@ -297,6 +300,12 @@ class Launcher:
             if changed or self.state.clock() != self._clock_shown:
                 self.draw()
 
+    def set_notice(self, text: str) -> None:
+        with self._lock:
+            if text != self.notice:
+                self.notice = text
+                self.draw()
+
     def tick(self) -> None:
         """Called every few seconds: redraw when the clock's minute changes."""
         with self._lock:
@@ -305,10 +314,11 @@ class Launcher:
 
     # ----- drawing -----
 
-    def _grid(self, n: int, cols: int, rows: int, top: int) -> list[tuple[int, int, int, int]]:
+    def _grid(self, n: int, cols: int, rows: int, top: int,
+              bottom: int = 0) -> list[tuple[int, int, int, int]]:
         margin, gap = 16, 14
         tw = (self.width - 2 * margin - (cols - 1) * gap) // cols
-        th = (self.height - top - margin - (rows - 1) * gap) // rows
+        th = (self.height - top - bottom - margin - (rows - 1) * gap) // rows
         return [(margin + (i % cols) * (tw + gap), top + (i // cols) * (th + gap), tw, th)
                 for i in range(n)]
 
@@ -352,8 +362,13 @@ class Launcher:
             items.append(("All apps", "#3a3f47", ("all", None)))
             cols = 4 if len(items) > 6 else 3
             rows = -(-len(items) // cols)
-            for box, (name, colour, target) in zip(self._grid(len(items), cols, rows, self.TOP),
-                                                   items, strict=False):
+            notice_h = 34 if self.notice else 0
+            if notice_h:
+                p.rect(0, self.height - notice_h, self.width, notice_h, RED)
+                p.text_centered(self.width // 2, self.height - notice_h + 10,
+                                self.notice.upper()[:64], 2, TEXT)
+            grid = self._grid(len(items), cols, rows, self.TOP, bottom=notice_h)
+            for box, (name, colour, target) in zip(grid, items, strict=False):
                 self._tile(p, box, name, colour, big=True)
                 self.targets.append((box, target))
         else:
@@ -389,13 +404,15 @@ class Launcher:
         self.frame.update(bytes(buf))
 
     @property
-    def home_rect(self) -> tuple[int, int, int, int] | None:
-        """(x, y, w, h) of the Home button on the video, None when switched off.
-        "left"/"right" = the middle of that edge, where apps rarely put controls."""
+    def nav_rect(self) -> tuple[int, int, int, int] | None:
+        """(x, y, w, h) of the button strip on the video (Back above Home), None when
+        switched off. "left"/"right" = the middle of that edge, where apps rarely put
+        controls."""
         pos = self.home_position
         if pos == "off":
             return None
-        w, h, m = self.HOME_W, self.HOME_H, self.HOME_MARGIN
+        w, m = self.HOME_W, self.HOME_MARGIN
+        h = self.HOME_H * 2 + self.NAV_GAP if self.back_button else self.HOME_H
         x = m if "left" in pos else self.width - w - m
         if pos in ("left", "right"):
             y = (self.height - h) // 2
@@ -403,18 +420,37 @@ class Launcher:
             y = m if pos.startswith("top") else self.height - h - m
         return x, y, w, h
 
-    def _draw_home_button(self, buf: bytearray) -> None:
-        rect = self.home_rect
+    def nav_buttons(self) -> list[tuple[str, tuple[int, int, int, int]]]:
+        """[(name, rect)]: "back" (when enabled) and "home"."""
+        rect = self.nav_rect
         if rect is None:
-            return
-        x, y, w, h = rect
+            return []
+        x, y, w, _h = rect
+        if not self.back_button:
+            return [("home", (x, y, w, self.HOME_H))]
+        return [("back", (x, y, w, self.HOME_H)),
+                ("home", (x, y + self.HOME_H + self.NAV_GAP, w, self.HOME_H))]
+
+    @property
+    def home_rect(self) -> tuple[int, int, int, int] | None:
+        return dict(self.nav_buttons()).get("home")
+
+    def _draw_home_button(self, buf: bytearray) -> None:
+        """Draw the Back and Home buttons."""
         p = Painter(buf, self.width, self.height)
-        p.rounded(x, y, w, h, 12, "#202830")
-        cx, top = x + w // 2, y + (h - 28) // 2
-        for i in range(8):                                    # roof
-            p.rect(cx - 2 - i * 2, top + i, 4 + i * 4, 1, TEXT)
-        p.rect(cx - 11, top + 8, 22, 20, TEXT)                # house
-        p.rect(cx - 4, top + 18, 8, 10, "#202830")            # door
+        for name, (x, y, w, h) in self.nav_buttons():
+            p.rounded(x, y, w, h, 12, "#202830")
+            cx, cy = x + w // 2, y + h // 2
+            if name == "home":
+                top = y + (h - 28) // 2
+                for i in range(8):                                # roof
+                    p.rect(cx - 2 - i * 2, top + i, 4 + i * 4, 1, TEXT)
+                p.rect(cx - 11, top + 8, 22, 20, TEXT)            # house
+                p.rect(cx - 4, top + 18, 8, 10, "#202830")        # door
+            else:
+                for i in range(11):                               # arrow head ◀
+                    p.rect(cx - 12 + i, cy - i, 1, 2 * i + 1, TEXT)
+                p.rect(cx - 1, cy - 3, 13, 7, TEXT)               # shaft
 
     def home_button_runs(self) -> list[tuple[int, bytes]]:
         """The button as (byte offset, bytes) runs, one per row, drawn once.
@@ -425,7 +461,7 @@ class Launcher:
         """
         if getattr(self, "_home_runs", None) is None:
             runs: list[tuple[int, bytes]] = []
-            rect = self.home_rect
+            rect = self.nav_rect
             if rect is not None:
                 black = bytearray(self.width * self.height * 2)
                 white = bytearray(b"\xff" * len(black))
@@ -539,9 +575,20 @@ class Launcher:
                 return target
         return None
 
-    def in_home_button(self, x: int, y: int) -> bool:
-        rect = self.home_rect
+    def nav_button_at(self, x: int, y: int) -> str | None:
+        """"back", "home" or None. The gap between the two counts as neither."""
+        for name, (bx, by, bw, bh) in self.nav_buttons():
+            if bx <= x < bx + bw and by <= y < by + bh:
+                return name
+        return None
+
+    def in_nav(self, x: int, y: int) -> bool:
+        """Anywhere on the button strip (taps there never reach the phone)."""
+        rect = self.nav_rect
         if rect is None:
             return False
         bx, by, bw, bh = rect
         return bx <= x < bx + bw and by <= y < by + bh
+
+    def in_home_button(self, x: int, y: int) -> bool:
+        return self.nav_button_at(x, y) == "home"

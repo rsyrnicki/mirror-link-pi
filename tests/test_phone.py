@@ -308,3 +308,17 @@ def test_car_keyboard_types_text_and_backspace_deletes_after_typing():
     assert sent[-1] == ph.keycode_message(0, ph.KEYCODE_DEL)
     link.on_key(0xFF0D, False)
     assert sent[-1] == ph.keycode_message(1, ph.KEYCODE_ENTER)
+
+
+CONNECTIVITY_WIFI_DEFAULT = """\
+Active default network: 175
+  NetworkAgentInfo{network{172}  ni{MOBILE[NR] CONNECTED extra: apn} Score(...IS_VALIDATED)
+  NetworkAgentInfo{network{175}  ni{WIFI CONNECTED extra: } Score(...ACCEPT_UNVALIDATED)
+"""
+
+
+def test_wifi_as_default_network_is_detected():
+    assert ph.wifi_is_default_network(CONNECTIVITY_WIFI_DEFAULT)
+    assert not ph.wifi_is_default_network(
+        CONNECTIVITY_WIFI_DEFAULT.replace("network: 175", "network: 172"))
+    assert not ph.wifi_is_default_network("")

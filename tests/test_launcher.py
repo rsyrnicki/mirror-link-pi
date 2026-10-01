@@ -250,3 +250,39 @@ def test_scroll_message_matches_scrcpy_layout():
     # scrcpy test_serialize_inject_scroll_event: (260, 1026) in 1080x1920, h=1, v=-1, buttons=1
     assert ph.scroll_message(260, 1026, 1080, 1920, 1.0, -1.0, 1) == bytes([
         3, 0, 0, 1, 4, 0, 0, 4, 2, 4, 0x38, 7, 0x80, 0x08, 0, 0xF8, 0, 0, 0, 0, 1])
+
+
+def test_back_button_above_home_sends_back():
+    import types
+
+    import mlpi.phone as ph
+    from mlpi.canvas import Canvas
+    from mlpi.video import DisplaySwitch
+
+    launcher = Launcher(VideoFrame(800, 480), [])
+    (b_name, back), (h_name, home) = launcher.nav_buttons()
+    assert (b_name, h_name) == ("back", "home") and back[1] < home[1]
+    assert launcher.nav_button_at(back[0] + 5, back[1] + 5) == "back"
+    gap_y = back[1] + back[3] + 2
+    assert launcher.nav_button_at(back[0] + 5, gap_y) is None
+    assert launcher.in_nav(back[0] + 5, gap_y)
+    assert Launcher(VideoFrame(800, 480), [], back_button=False).nav_buttons()[0][0] == "home"
+
+    switch = DisplaySwitch(Canvas(800, 480))
+    cfg = types.SimpleNamespace(adb="adb", adb_home="", launcher=True, apps=[])
+    link = ph.PhoneLink(cfg, switch.new_video_frame(), switch)
+    sent = []
+    link._send = sent.append
+    switch.show(link.frame)                                  # an app is showing
+    bx, by, bw, bh = link.launcher.nav_buttons()[0][1]
+    link.on_pointer(bx + bw // 2, by + bh // 2, 1)
+    link.on_pointer(bx + bw // 2, by + bh // 2, 0)
+    assert sent == [ph.keycode_message(0, ph.KEYCODE_BACK), ph.keycode_message(1, ph.KEYCODE_BACK)]
+    assert switch.showing(link.frame)
+
+
+def test_notice_line_shrinks_the_tiles():
+    launcher = Launcher(VideoFrame(800, 480), list(DEFAULT_APPS))
+    bottom = max(b[1] + b[3] for b, t in launcher.targets if t[0] == "app")
+    launcher.set_notice("No internet")
+    assert max(b[1] + b[3] for b, t in launcher.targets if t[0] == "app") < bottom

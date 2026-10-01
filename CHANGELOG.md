@@ -5,7 +5,8 @@
 - Launcher status bar: the phone's clock, signal bars + network type, battery (with
   charging bolt), media keys (previous, play/pause, next), Do Not Disturb toggle and a
   toggle for the phone's own screen. Polled from the phone every 30 s with one adb call.
-- The car's rotary knob: a highlight on the launcher (push opens), scroll wheel in apps.
+- The car's rotary knob: a highlight on the launcher (push opens), scroll wheel in apps
+  (for head units that send knob events; the MIB2 Standard doesn't).
 - Experimental Bluetooth audio auto-connect: variant `s6-audio-home-bt` and
   `[experiment] start_variant` for a safe trial with automatic fallback.
 - Updates over the USB cable: `prepare-sd.sh --ssh` once, then `scripts/update-pi.sh`.
@@ -21,6 +22,11 @@
   port, and a port scan when mDNS stays silent.
 - Compatibility list (`docs/compatibility.md`) and a GitHub issue template for reports.
 - The car's keyboard types into the phone (and fills in the pairing code).
+- A Back button above the Home button on the phone video (`back_button`): the MIB2
+  Standard sends no knob or key events to MirrorLink at all.
+- Warning line on the launcher when the phone uses the Pi's Wi-Fi (no internet) as its
+  default network, with the fix in `docs/phone-mode.md`; checked every 2 minutes, and
+  "avoid bad Wi-Fi" is re-applied then too.
 - `collect-logs.sh --pi`: fetch the logs over the USB cable, card stays in the Pi.
 - Fixed: the status bar stopped updating on phones where a poll part found nothing
   (the poll's exit status discarded the whole result); polls are now logged.

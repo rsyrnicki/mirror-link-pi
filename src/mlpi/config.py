@@ -167,6 +167,7 @@ class PhoneConfig:
     knob_invert: bool = False            # True: clockwise = wheel up (zoom in)
     home_button: str = "right"           # right | left | top-left | top-right |
                                          # bottom-left | bottom-right | off
+    back_button: bool = True             # a Back button above Home (the car sends no Back key)
     avoid_bad_wifi: bool = True          # set Android's "avoid bad Wi-Fi" so mobile data
                                          # stays the phone's internet
 

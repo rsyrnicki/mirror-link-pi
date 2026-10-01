@@ -25,6 +25,7 @@ import errno
 import logging
 import os
 import random
+import re
 import selectors
 import socket
 import struct
@@ -75,6 +76,7 @@ KNOB_PUSH = 0x30000008
 KNOB_CW, KNOB_CCW = 0x3000000E, 0x3000000F          # rotate z clockwise / anti-clockwise
 KNOB_DPAD = {KNOB_UP: 19, KNOB_DOWN: 20, KNOB_LEFT: 21, KNOB_RIGHT: 22}   # KEYCODE_DPAD_*
 STATUS_POLL_SECONDS = 30
+CONNECTIVITY_RECHECK_SECONDS = 120
 
 # Car keys (MirrorLink device keys, Part 2 Annex B, and plain X11 keysyms) → Android.
 KEYMAP = {
@@ -117,6 +119,19 @@ def keysym_char(keysym: int) -> str:
     if 0xFFB0 <= keysym <= 0xFFB9:                       # keypad digits
         return chr(keysym - 0xFFB0 + ord("0"))
     return ""
+
+
+def wifi_is_default_network(dumpsys: str) -> bool:
+    """True if `dumpsys connectivity` shows Wi-Fi (the Pi's, which has no internet) as
+    the phone's default network: then apps have no internet. Happens when the phone
+    was told to "stay connected" to it (the network is then marked acceptUnvalidated)."""
+    m = re.search(r"Active default network:\s*(\d+)", dumpsys)
+    if not m:
+        return False
+    for line in dumpsys.splitlines():
+        if f"network{{{m.group(1)}}}" in line and "NetworkAgentInfo" in line:
+            return "ni{WIFI" in line
+    return False
 
 
 def scroll_message(x: int, y: int, width: int, height: int, hscroll: float,
@@ -618,7 +633,8 @@ class PhoneLink:
         if getattr(cfg, "launcher", False) and switch is not None:
             from .launcher import Launcher, parse_apps
             self.launcher = Launcher(switch.new_video_frame(), parse_apps(cfg.apps),
-                                     home_button=getattr(cfg, "home_button", "right"))
+                                     home_button=getattr(cfg, "home_button", "right"),
+                                     back_button=getattr(cfg, "back_button", True))
         # Pairing from the car screen (pairing.py) when the phone doesn't know our key.
         self.pairing = None
         if switch is not None:
@@ -629,7 +645,7 @@ class PhoneLink:
         self._unreachable_since: float | None = None
         self._pairing_dismissed_until = 0.0
         self._tile_press: tuple[int, int] | None = None
-        self._home_press = False
+        self._nav_press: str | None = None   # Back/Home button held down
         self._last_typed = float("-inf")            # monotonic time of the last typed char
         self._show_video_on_frame = False
         self.device_name = ""
@@ -711,7 +727,8 @@ class PhoneLink:
             changed = False
         self._event("phone_bt_address", found=bool(address), changed=changed)
 
-    def _record_connectivity(self, serial: str) -> None:
+    def _record_connectivity(self, serial: str,
+                             stop: threading.Event | None = None) -> None:
         """Snapshot which network the phone uses for the internet (Wi-Fi to the Pi has
         none), 20 s after connecting: full dump to phone-connectivity.txt, the key
         lines as a phone_connectivity event."""
@@ -731,7 +748,27 @@ class PhoneLink:
                 pass
         keys = [line.strip()[:300] for line in text.splitlines()
                 if any(k in line for k in self.CONNECTIVITY_KEYS)]
-        self._event("phone_connectivity", lines=keys[:40])
+        wifi_default = wifi_is_default_network(text)
+        self._event("phone_connectivity", lines=keys[:40], wifi_default=wifi_default)
+        self._show_wifi_notice(wifi_default)
+        # Keep watching: the phone may switch later (and may reset "avoid bad Wi-Fi").
+        stop = stop or threading.Event()
+        while not stop.wait(CONNECTIVITY_RECHECK_SECONDS) and not self._stop.is_set():
+            if getattr(self.cfg, "avoid_bad_wifi", True):
+                self._avoid_bad_wifi(serial)
+            dump = self.adb.run("shell", "dumpsys", "connectivity", serial=serial, timeout=30)
+            if dump.returncode != 0:
+                return                                    # disconnected
+            now = wifi_is_default_network(dump.stdout or "")
+            if now != wifi_default:
+                wifi_default = now
+                self._event("phone_wifi_default", wifi_default=now)
+                self._show_wifi_notice(now)
+
+    def _show_wifi_notice(self, wifi_default: bool) -> None:
+        if self.launcher:
+            self.launcher.set_notice("No internet: phone uses the Pi's Wi-Fi, see phone-mode.md"
+                                     if wifi_default else "")
 
     def _poll_status(self, serial: str, stop: threading.Event) -> None:
         """Feed the launcher's status bar: one adb call every 30 s, clock ticks between."""
@@ -813,14 +850,19 @@ class PhoneLink:
                 if target is not None and self.launcher.target_at(x, y) == target:
                     self._launcher_action(target)
             return True
-        if self._home_press:                          # swallow until the finger lifts
+        if self._nav_press:                           # swallow until the finger lifts
             if not pressed:
-                self._home_press = False
-                if self.launcher.in_home_button(x, y):
-                    self.show_launcher()
+                name, self._nav_press = self._nav_press, None
+                if self.launcher.nav_button_at(x, y) == name:
+                    if name == "home":
+                        self.show_launcher()
+                    else:                             # the car sends no Back key
+                        self._send(keycode_message(ACTION_DOWN, KEYCODE_BACK))
+                        self._send(keycode_message(ACTION_UP, KEYCODE_BACK))
+                        self._event("phone_back")
             return True
-        if pressed and not self._down and self.launcher.in_home_button(x, y):
-            self._home_press = True
+        if pressed and not self._down and self.launcher.in_nav(x, y):
+            self._nav_press = self.launcher.nav_button_at(x, y) or "gap"
             return True
         return False
 
@@ -1196,11 +1238,11 @@ class PhoneLink:
             if self.launcher:
                 threading.Thread(target=self._load_app_list, args=(serial,),
                                  name="phone-apps", daemon=True).start()
-            threading.Thread(target=self._record_connectivity, args=(serial,),
-                             name="phone-net", daemon=True).start()
             self._serial = serial
             self._leave_pairing()
-            status_stop = threading.Event()
+            status_stop = threading.Event()             # ends this connection's helpers
+            threading.Thread(target=self._record_connectivity, args=(serial, status_stop),
+                             name="phone-net", daemon=True).start()
             if self.launcher:
                 threading.Thread(target=self._poll_status, args=(serial, status_stop),
                                  name="phone-status", daemon=True).start()

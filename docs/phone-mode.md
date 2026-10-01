@@ -186,7 +186,20 @@ network state (`phone-connectivity.txt`).
 
 ## If it lags, freezes or has no internet
 
-Collect the logs (`sudo ./scripts/collect-logs.sh /dev/sdX`) and look at the **Phone:**
+**No internet, and the car shows "No internet: phone uses the Pi's Wi-Fi":** the phone
+has been told to stay connected to `MirrorLink-Pi` even though it has no internet, so
+it sends all traffic there. "Avoid bad Wi-Fi" doesn't override that choice. To undo it:
+
+1. On the phone: Settings → Connections → Wi-Fi → `MirrorLink-Pi` → ⚙ → **Forget**.
+2. Join `MirrorLink-Pi` again with its password.
+3. When the phone says the network has no internet, **ignore the message**: don't tap
+   it and don't choose "stay connected" / "keep Wi-Fi connection".
+4. Optional, so the phone doesn't reset the setting: Settings → Connections → Wi-Fi →
+   ⋮ → Intelligent Wi-Fi → **Switch to mobile data** on (Samsung; on other phones
+   Developer options → "Mobile data always active" plus "Switch to mobile data").
+
+Collect the logs (`./scripts/collect-logs.sh --pi`, or `sudo ./scripts/collect-logs.sh
+/dev/sdX` with the card in the laptop) and look at the **Phone:**
 and **Pi health:** sections of the session's `REPORT.txt`:
 
 | Report line | Healthy | If not |
@@ -215,6 +228,7 @@ colour format the Pi has to convert in Python. Use `mlpi car-view` (desk test 2)
 | `bt_address` | `""` | the phone's Bluetooth address for `s6-audio-home-bt` (`""` = read it from the phone) |
 | `knob_invert` | `false` | the car's knob scrolls the other way inside apps |
 | `home_button` | `"right"` | where the Pi's Home button sits on the phone video: `right` / `left` (middle of that edge), `top-left`, `top-right`, `bottom-left`, `bottom-right`, or `off` |
+| `back_button` | `true` | a Back button above the Home button (head units like the MIB2 Standard send no Back key to MirrorLink) |
 | `system_decorations` | `false` | Samsung's secondary-display launcher + navigation bar on the virtual display |
 | `keep_active` | `true` | keeps the phone awake while mirroring |
 | `screen_off` | `true` | turns the phone's own screen off (without locking — a locked phone blanks the car screen) |
@@ -253,7 +267,11 @@ Bluetooth BTA2DP* means the car took the hint.
   The quick settings tile makes switching it back on one tap.
 - **Portrait-only apps** (e.g. some audiobook apps) show with black bars left and right.
 - The phone sometimes resets Android's "avoid bad Wi-Fi" setting; the Pi sets it again
-  on every connection.
+  on every connection and every 2 minutes.
+- **No knob, no hardware keys** on the VW MIB2 Standard: it tells the Pi it only has
+  "knob shift x/y" and no device keys, and in practice sends neither (nor its overlay's
+  back button). Hence the Pi's own **Back** button above Home. The car's keyboard
+  does work: it sends the whole text when you confirm it.
 
 ## Licences
 

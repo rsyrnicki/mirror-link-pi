@@ -13,7 +13,7 @@ contain such details, so check it before attaching it.
 
 | Car / head unit | Head unit model (from `mlpi report`, *Car client profile*) | Pi / OS | MirrorLink-Pi version | Variant that worked | Result | Date | Notes |
 |---|---|---|---|---|---|---|---|
-| VW Polo, MIB2 Standard | `VW-Mibstd2` | Pi Zero 2 W, Pi OS Lite 64-bit (Trixie) | 1.0.0 | `s6-audio-home` | ✅ works: status screen and phone mode, with touch | 2026-09 | The picture is blocked while driving (stock behaviour for uncertified MirrorLink content). Audio doesn't switch to the phone's Bluetooth by itself while the MirrorLink app runs: select Bluetooth media by hand. |
+| VW Polo, MIB2 Standard | `VW-Mibstd2` | Pi Zero 2 W, Pi OS Lite 64-bit (Trixie) | 1.0.0 | `s6-audio-home` | ✅ works: status screen and phone mode, with touch | 2026-09 | The picture is blocked while driving (stock behaviour for uncertified MirrorLink content). Audio doesn't switch to the phone's Bluetooth by itself while the MirrorLink app runs: select Bluetooth media by hand. The knob, the hardware keys and the overlay's back button send nothing to MirrorLink (the car announces knob shift x/y only, no device keys); its on-screen keyboard works. |
 
 Result legend: ✅ works · 🟡 partly (say what's missing) · ❌ doesn't connect (say how far
 it got: the LED stage or the *FURTHEST STAGE* line of `mlpi report`).

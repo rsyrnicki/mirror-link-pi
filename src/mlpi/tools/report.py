@@ -242,11 +242,16 @@ def _phone_section(events: list[dict]) -> list[str]:
     for e in phone:
         kind = e["kind"]
         if kind in ("phone_stream_end", "phone_app_list", "phone_open_app", "phone_session",
-                    "phone_avoid_bad_wifi", "phone_bt_address", "phone_dnd"):
+                    "phone_avoid_bad_wifi", "phone_bt_address", "phone_dnd",
+                    "phone_media_key", "phone_status_poll", "phone_status_poll_error",
+                    "phone_wifi_default", "phone_pair", "phone_pairing_not_needed"):
             detail = {k: v for k, v in e.items()
                       if k not in ("t", "wall", "kind", "mono", "seq", "stdout_head")}
             out.append(f"  t={e['t']} {kind} {detail}")
         elif kind == "phone_connectivity":
+            if e.get("wifi_default"):
+                out.append(f"  t={e['t']} !!! the phone's default network is the Pi's Wi-Fi: "
+                           "NO INTERNET (docs/phone-mode.md)")
             out.append(f"  t={e['t']} phone network state:")
             out += [f"      {line}" for line in e.get("lines", [])[:15]]
     return out
