@@ -5,6 +5,11 @@
 - Launcher status bar: the phone's clock, signal bars + network type, battery (with
   charging bolt), media keys (previous, play/pause, next), Do Not Disturb toggle and a
   toggle for the phone's own screen. Polled from the phone every 30 s with one adb call.
+- The car's rotary knob: a highlight on the launcher (push opens), scroll wheel in apps.
+- Experimental Bluetooth audio auto-connect: variant `s6-audio-home-bt` and
+  `[experiment] start_variant` for a safe trial with automatic fallback.
+- Updates over the USB cable: `prepare-sd.sh --ssh` once, then `scripts/update-pi.sh`.
+- Compatibility list (`docs/compatibility.md`) and a GitHub issue template for reports.
 
 ## 1.0.0 — 2026-10-01
 

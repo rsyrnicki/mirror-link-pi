@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -114,3 +115,54 @@ def test_phone_mode_installs_server_key_and_enables_hotspot_once(tmp_path):
     assert toml2.count("\n[phone]\n") == 1 and password in toml2
     # The generated file is valid TOML that enables phone mode.
     assert tomllib.loads(toml2)["phone"]["enabled"] is True
+
+
+@pytest.mark.skipif(not shutil.which("ssh-keygen"), reason="needs ssh-keygen")
+def test_ssh_option_installs_key_and_enables_sshd(tmp_path):
+    boot, root = _fake_card(tmp_path, STOCK_CONFIG)
+    (root / "usr/lib/systemd/system").mkdir(parents=True)
+    (root / "usr/lib/systemd/system/ssh.service").write_text("[Unit]\n")
+    keydir = tmp_path / "keys"
+    env = dict(os.environ, MLPI_SSH_KEYDIR=str(keydir))
+    out = subprocess.run(["bash", str(SCRIPT), "--ssh", "--boot", str(boot), "--root", str(root)],
+                         capture_output=True, text=True, timeout=120, env=env)
+    assert out.returncode == 0, out.stderr
+    pub = (keydir / "id_ed25519.pub").read_text()
+    assert (root / "etc/mlpi/authorized_keys").read_text() == pub
+    conf = (root / "etc/ssh/sshd_config.d/mlpi.conf").read_text()
+    assert "AuthorizedKeysFile .ssh/authorized_keys /etc/mlpi/authorized_keys" in conf
+    assert "PasswordAuthentication no" in conf
+    link = root / "etc/systemd/system/multi-user.target.wants/ssh.service"
+    assert os.readlink(link) == "/usr/lib/systemd/system/ssh.service"
+
+
+def test_apply_update_keeps_vendor_and_installs_units(tmp_path):
+    opt, sysd, src = tmp_path / "opt", tmp_path / "systemd", tmp_path / "update"
+    (opt / "vendor").mkdir(parents=True)
+    (opt / "vendor/scrcpy-server").write_text("jar")
+    (opt / "src").mkdir()
+    (opt / "src/old.py").write_text("old")
+    sysd.mkdir()
+    (src / "src").mkdir(parents=True)
+    (src / "src/new.py").write_text("new")
+    (src / "systemd").mkdir()
+    (src / "systemd/mlpi.service").write_text("[Unit]\n")
+    (src / "systemd/mlpi.target").write_text("[Unit]\n")
+    toml = tmp_path / "mlpi.toml"
+    toml.write_text("[led]\nenabled = true\n")         # not phone mode: no package check
+    calls = tmp_path / "calls"
+    fake = tmp_path / "systemctl"
+    fake.write_text(f'#!/bin/sh\necho "$@" >> {calls}\n')
+    fake.chmod(0o755)
+    env = dict(os.environ, MLPI_OPT=str(opt), MLPI_SYSTEMD_DIR=str(sysd), MLPI_TOML=str(toml),
+               MLPI_SYSTEMCTL=str(fake))
+    out = subprocess.run(["bash", str(REPO / "scripts/apply-update.sh"), str(src), "0",
+                          "prepared: now", "git: abc"], capture_output=True, text=True,
+                         timeout=60, env=env)
+    assert out.returncode == 0, out.stderr
+    assert (opt / "src/new.py").exists() and not (opt / "src/old.py").exists()
+    assert (opt / "vendor/scrcpy-server").read_text() == "jar"
+    assert (opt / "VERSION").read_text() == "prepared: now\ngit: abc\n"
+    assert (sysd / "mlpi.service").exists() and not src.exists()
+    assert "NOTE" not in out.stdout
+    assert calls.read_text().split() == ["daemon-reload", "restart", "mlpi.target"]

@@ -115,13 +115,15 @@ git clone https://github.com/rsyrnicki/mirror-link-pi && cd mirror-link-pi
 PYTHONPATH=src python3 -m mlpi pair-phone
 # 3. Install onto the card (--phone adds phone mode; leave it out for the Pi's own screen):
 lsblk                                         # find the card, e.g. /dev/sdb
-sudo ./scripts/prepare-sd.sh --phone /dev/sdX
+sudo ./scripts/prepare-sd.sh --phone --ssh /dev/sdX
 # 4. Pre-flight at home: card in the Pi, Pi's USB port → laptop, wait for 2 LED blinks:
 PYTHONPATH=src python3 -m mlpi simulate-car --target 192.168.7.2
 PYTHONPATH=src python3 -m mlpi car-view       # live window, like the car's screen
 # 5. Car: plug the Pi into the car's USB socket, open "MirrorLink Pi" on the head unit.
 # 6. Back home, if something went wrong:
 sudo ./scripts/collect-logs.sh /dev/sdX
+# Later updates without taking the card out (card prepared with --ssh, Pi on USB):
+./scripts/update-pi.sh <pi-user>@192.168.7.2
 ```
 
 Step by step, with what to expect at each point:

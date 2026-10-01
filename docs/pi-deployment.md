@@ -57,6 +57,8 @@ What it writes:
 | bootfs `mlpi.toml` | settings you can edit from any OS (see below) |
 
 Re-running the script updates the code on the card and keeps recorded sessions.
+Add `--ssh` once to be able to update **without taking the card out** later (see
+[Updating over the USB cable](#updating-over-the-usb-cable)).
 
 ## 3. First boot
 
@@ -106,6 +108,29 @@ sudo ./scripts/collect-logs.sh /dev/sdX          # → ./car-logs/<timestamp>/RE
 ```
 
 Or over SSH at home: `scp -r <user>@<pi>:/var/lib/mlpi/sessions .`
+
+## Updating over the USB cable
+
+Once a card has been prepared with `--ssh`, new versions go onto the Pi while it's
+plugged into the laptop, no card swapping:
+
+```bash
+git pull
+./scripts/update-pi.sh <pi-user>@192.168.7.2     # the user you set in Raspberry Pi Imager
+```
+
+It copies the code over SSH, keeps the scrcpy server and every recording, and reboots
+the Pi (about 30 s). What `--ssh` set up:
+
+- SSH is switched on. Logging in on the USB link (192.168.7.2) and the phone hotspot
+  (192.168.8.1) works **only with keys**, no passwords.
+- A key made for this laptop, `~/.config/mlpi/ssh/id_ed25519`, is allowed for any user
+  on the Pi (`/etc/mlpi/authorized_keys`). Keep it private like any SSH key.
+
+New system packages can't be installed this way, since the Pi has no internet. If an
+update needs one, the update says so; then run `sudo ./scripts/prepare-sd.sh --phone
+/dev/sdX` once with the card in the laptop. If the card was re-flashed, delete
+`~/.config/mlpi/ssh/known_hosts` (the Pi has new host keys).
 
 ## Troubleshooting on the Pi (at home, via SSH or keyboard)
 

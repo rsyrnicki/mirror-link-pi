@@ -10,6 +10,9 @@
 #   adb + FFmpeg's libavcodec/libswscale installed into the image (needs
 #   qemu-user-static on this laptop),
 #   the pinned scrcpy server, and the adb key paired with `mlpi pair-phone`.
+#   add --ssh to allow updates over the USB cable later (scripts/update-pi.sh):
+#   SSH on, key login with a key made for this laptop (~/.config/mlpi/ssh/),
+#   no password login on the USB link and the phone hotspot.
 #
 # What it does (idempotent, safe to re-run to update the code on the card):
 #   rootfs  /opt/mlpi                        code (src, config, systemd, scripts)
@@ -28,6 +31,7 @@ DEV=""
 BOOT=""
 ROOT=""
 PHONE=0
+SSH=0
 MOUNTED=()
 BINDS=()            # chroot bind mounts: unmounted only, never rmdir'd
 RESOLV_SAVED=0
@@ -36,7 +40,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 say() { echo "==> $*"; }
 
 usage() {
-    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -45,6 +49,7 @@ while [[ $# -gt 0 ]]; do
         --boot) BOOT="$2"; shift 2 ;;
         --root) ROOT="$2"; shift 2 ;;
         --phone) PHONE=1; shift ;;
+        --ssh) SSH=1; shift ;;
         -h|--help) usage ;;
         /dev/*) DEV="$1"; shift ;;
         *) usage ;;
@@ -302,6 +307,50 @@ PHONE_SSID=""
 PHONE_PSK=""
 if (( PHONE )); then
     phone_setup
+fi
+
+# ---------- SSH for updates over the USB cable (--ssh) ----------
+
+ssh_setup() {
+    # The Pi user is only created at first boot (from Imager's settings), so the key
+    # can't go into its home yet: /etc/mlpi/authorized_keys works for any user.
+    local owner home keydir unit
+    owner="${SUDO_USER:-root}"
+    home="$(getent passwd "$owner" | cut -d: -f6)"
+    keydir="${MLPI_SSH_KEYDIR:-$home/.config/mlpi/ssh}"
+    if [[ ! -f "$keydir/id_ed25519" ]]; then
+        command -v ssh-keygen >/dev/null || die "--ssh needs ssh-keygen (package openssh-client)"
+        sudo -u "$owner" mkdir -p "$keydir"
+        chmod 0700 "$keydir"
+        sudo -u "$owner" ssh-keygen -q -t ed25519 -N "" -C "mlpi-update" -f "$keydir/id_ed25519"
+        say "created the update key $keydir/id_ed25519"
+    fi
+    install -d -m 0755 "$ROOT/etc/mlpi" "$ROOT/etc/ssh/sshd_config.d"
+    install -m 0644 "$keydir/id_ed25519.pub" "$ROOT/etc/mlpi/authorized_keys"
+    cat > "$ROOT/etc/ssh/sshd_config.d/mlpi.conf" <<'CONF'
+# MirrorLink-Pi (prepare-sd.sh --ssh): the laptop that prepared the card may log in
+# with its update key; on the USB link and the phone hotspot only with keys.
+AuthorizedKeysFile .ssh/authorized_keys /etc/mlpi/authorized_keys
+Match LocalAddress 192.168.7.2,192.168.8.1
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+CONF
+    unit=""
+    for candidate in "$ROOT"/usr/lib/systemd/system/ssh.service \
+                     "$ROOT"/lib/systemd/system/ssh.service; do
+        [[ -f "$candidate" ]] && { unit="$candidate"; break; }
+    done
+    install -d "$ROOT/etc/systemd/system/multi-user.target.wants"
+    if [[ -n "$unit" ]]; then
+        ln -sfn "/${unit#"$ROOT"/}" "$ROOT/etc/systemd/system/multi-user.target.wants/ssh.service"
+    else
+        touch "$BOOT/ssh"         # older images: enabled at first boot by sshswitch
+    fi
+    say "SSH enabled: update later with ./scripts/update-pi.sh <pi-user>@192.168.7.2"
+}
+
+if (( SSH )); then
+    ssh_setup
 fi
 
 sync
