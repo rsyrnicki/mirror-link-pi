@@ -5,11 +5,18 @@ release (Debian 13 "Trixie", Python 3.13). Bookworm (Python 3.11) works too.
 
 The whole installation happens on the laptop. The Pi never needs internet:
 MirrorLink-Pi uses only the Python standard library that ships with Pi OS Lite. It
-brings its own DHCP server, VNC server and packet recorder, so there is no `apt install`
-(no dnsmasq, x11vnc, Xvfb or tcpdump) and no chroot/QEMU.
+brings its own DHCP server, VNC server and packet recorder (no dnsmasq, x11vnc, Xvfb or
+tcpdump).
 
-Laptop requirements: Linux (tested on Fedora), `sudo`, Python ≥ 3.11 for the
-simulator and the report, and the repo checked out.
+**Phone mode** (`--phone`, see [`phone-mode.md`](phone-mode.md)) additionally installs
+`adb`, `iw` and FFmpeg's H.264 decoder libraries into the image. The script does that
+from the laptop by running the image's own `apt` under QEMU, so the **laptop needs
+internet** for this step and the `qemu-user-static` package.
+
+Laptop requirements: Linux (tested on Fedora and Ubuntu), `sudo`, Python ≥ 3.11, the
+repo checked out, and for phone mode `adb` + `qemu-user-static`
+(Debian/Ubuntu: `sudo apt install adb qemu-user-static`;
+Fedora: `sudo dnf install android-tools qemu-user-static`).
 
 ## 1. Flash the card — Raspberry Pi Imager
 
@@ -27,7 +34,11 @@ simulator and the report, and the repo checked out.
 ```bash
 lsblk                                   # find the card, e.g. /dev/sdb or /dev/mmcblk0
 sudo ./scripts/prepare-sd.sh /dev/sdX   # the whole device, not a partition
+# or, with phone mode (pair the phone first: see phone-mode.md):
+sudo ./scripts/prepare-sd.sh --phone /dev/sdX
 ```
+
+Double-check the device name with `lsblk` (size, removable): the script writes to it.
 
 If your desktop mounted the partitions already, the script unmounts and remounts
 them itself. Alternatively: `sudo ./scripts/prepare-sd.sh --boot /run/media/$USER/bootfs --root /run/media/$USER/rootfs`.
@@ -75,8 +86,11 @@ saved `car-view.png` — that is the picture the car should get.
 
 The boot partition is FAT, so it can be edited on any computer. Useful knobs:
 
-- `[experiment] mode = "fixed"` + `fixed_variant = "spec-1.1-dap"` — stop rotating and always use
-  one variant (e.g. after a winner was found).
+- `[experiment] mode = "fixed"` + `fixed_variant = "s6-audio-home"` — stop rotating and
+  always use one variant. `s6-audio-home` is the one the VW MIB2 accepts; with the default
+  `rotate` the Pi starts with it anyway and only moves on if the car doesn't connect.
+- `[phone] wifi_country` — your country code (default `DE`); it sets the legal Wi-Fi
+  channels and power for the Pi's hotspot.
 - `[usb] vid/pid` — pretend to be another vendor if a head unit filters on it.
 - `[watchdog] idle_reconnect_seconds = 0` — never soft re-plug.
 - `[usb] ml_command = true` — also answer the MirrorLink USB command via a FunctionFS

@@ -3,7 +3,11 @@
 What the current code does **not** solve, and what we know about it. Each entry should
 be driven by evidence from a car session before we spend time on a fix.
 
-## 1. The car launches our app but never connects to VNC (current blocker)
+## 1. The car launches our app but never connects to VNC (solved)
+
+**Solved on 2026-09-29** by the `s6-audio-home` variant: an app list shaped like a real
+Galaxy S6's (VNC home-screen app plus RTP audio entries). The history below is kept for
+other head units that may behave differently.
 
 **Evidence (2026-05-02, `launch-realcert.pcap`):** every ~10 s the MIB II runs
 DHCP → descriptor → Get/SetClientProfile → GetApplicationList → SUBSCRIBE →

@@ -1,7 +1,8 @@
 # Field test: one trip to the car
 
-Goal of a trip: either something from the Pi appears on the head unit, or we come back
-with enough data to know what to change. Nothing needs to be typed in the car.
+Goal of a trip: the Pi's screen (or, in phone mode, your phone's apps) on the head unit,
+and if anything goes wrong, enough data in the logs to know what to change. Nothing
+needs to be typed in the car.
 
 ## Pre-flight at home
 
@@ -33,11 +34,11 @@ Pre-flight boots are recorded as sessions too. Simulator traffic is marked
 2. Plug the Pi (USB port) into the car's USB socket.
 3. **Note the time** on your phone (photos of the head unit screen with timestamps help
    a lot: they let us line up what the screen showed with the logs).
-4. Wait. The Pi boots in ~20–30 s. The car then retries the connection by itself every
-   ~10 s; each retry uses the next variant from `config/variants.toml`. One full
-   round of the 6 variants takes about a minute. **Stay at least 5 minutes.**
-5. If the head unit shows a MirrorLink menu or app list, tap our entry
-   ("MirrorLink Pi Display") and note what happens.
+4. Wait. The Pi boots in ~20–30 s. The car then connects by itself. On a car the Pi
+   hasn't seen before, each retry (~every 10 s) uses the next protocol variant from
+   `config/variants.toml`, starting with `s6-audio-home`, the one the VW MIB2 accepts.
+   If nothing happens, **stay at least 5 minutes** so all variants get a turn.
+5. When the head unit shows its MirrorLink app list, tap **MirrorLink Pi**.
 6. Read the LED (it shows the best result of this boot):
 
 | LED | Meaning |
@@ -46,12 +47,12 @@ Pre-flight boots are recorded as sessions too. Simulator traffic is marked
 | 1 blink, pause | USB link up |
 | 2 blinks, pause | the car took an address (DHCP) |
 | 3 blinks, pause | the car fetched our UPnP descriptor |
-| 4 blinks, pause | the car launched our app — **this is where it stopped so far** |
+| 4 blinks, pause | the car launched our app |
 | solid on | **the car connected to our VNC server** |
 
-7. If you see the status screen ("MIRRORLINK-PI", boot number, moving green block,
-   colour bars) on the head unit: take photos, touch the screen and turn the knob a few
-   times (should show up in `TOUCH:` / `KEY:`), and stay a few minutes.
+7. You should see the status screen ("MIRRORLINK-PI", boot number, moving green block,
+   colour bars), or in phone mode the launcher once the phone is connected
+   ([`phone-mode.md`](phone-mode.md#in-the-car)). Touches show up in `TOUCH:` / `KEY:`.
 8. Unplug when done. Sudden power loss is fine: logs are synced every 2–3 s.
 
 Optional second round: unplug/replug once. That is a new boot, i.e. a new session

@@ -1,7 +1,11 @@
 # MirrorLink-Pi
 
 Make a Raspberry Pi Zero 2 W appear as a MirrorLink phone to a car head unit, so the
-car displays a screen rendered by the Pi (over VNC, over USB).
+car displays a screen rendered by the Pi (over VNC, over USB) — and, in **phone mode**,
+your Android phone's apps (Google Maps, Spotify, …) on the car's screen, with touch.
+
+**Version 1.0** (2026-10-01): tested end to end with a VW Polo's MIB2 Standard head unit
+(`VW-Mibstd2`) and a Samsung Galaxy A56 (Android 16). See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## First success — 2026-09-29
 
@@ -84,34 +88,50 @@ phone), the car is the *MirrorLink Client*.
 Everything is pure Python standard library on stock Raspberry Pi OS Lite, so the SD
 card is prepared completely on the laptop and the Pi never needs internet.
 
-## Next: phone mode (scrcpy)
+## Phone mode (scrcpy)
 
-Goal: navigation and Spotify on the car screen. The Pi mirrors an Android phone
-(tested target: Samsung A56, Android 16) over its own Wi-Fi hotspot with
+The Pi mirrors an Android phone over its own Wi-Fi hotspot with
 [scrcpy](https://github.com/Genymobile/scrcpy): the phone renders an 800×480 virtual
 display, the Pi decodes it and sends it to the car through the MirrorLink session above,
-and car touches go back to the phone. Audio stays on the phone's Bluetooth link to the
-car. Set up with `mlpi pair-phone` and `prepare-sd.sh --phone`, then try it at the desk
-with `mlpi phone-preview`. See [`docs/phone-mode.md`](docs/phone-mode.md).
+and car touches go back to the phone. The Pi draws its own launcher with big tiles for
+your favourite apps. Internet stays on the phone's mobile data; audio stays on the
+phone's Bluetooth link to the car. See [`docs/phone-mode.md`](docs/phone-mode.md).
 
 ## Quick start
 
+You need: a **Raspberry Pi Zero 2 W**, a microSD card (8 GB or more), a micro-USB
+**data** cable (USB-A or USB-C to micro-USB, to match the car's socket), a **Linux
+laptop**, and for phone mode an **Android phone** (Android 11 or newer, for Wireless
+debugging).
+
 ```bash
-# 1. Flash Raspberry Pi OS Lite (64-bit) with Raspberry Pi Imager (set a user).
-# 2. Install onto the card, from the laptop:
-sudo ./scripts/prepare-sd.sh /dev/sdX
-# 3. Pre-flight at home: Pi's USB port → laptop, then
+# 0. On the laptop, once (Python 3.11+; Debian/Ubuntu package names,
+#    Fedora: sudo dnf install android-tools qemu-user-static python3-tkinter):
+sudo apt install adb qemu-user-static python3-tk
+git clone https://github.com/rsyrnicki/mirror-link-pi && cd mirror-link-pi
+# 1. Flash Raspberry Pi OS Lite (64-bit) with Raspberry Pi Imager (set a user),
+#    then take the card out and put it back in.
+# 2. Phone mode only: pair the phone with the Pi's key (phone + laptop on home Wi-Fi):
+PYTHONPATH=src python3 -m mlpi pair-phone
+# 3. Install onto the card (--phone adds phone mode; leave it out for the Pi's own screen):
+lsblk                                         # find the card, e.g. /dev/sdb
+sudo ./scripts/prepare-sd.sh --phone /dev/sdX
+# 4. Pre-flight at home: card in the Pi, Pi's USB port → laptop, wait for 2 LED blinks:
 PYTHONPATH=src python3 -m mlpi simulate-car --target 192.168.7.2
-# 4. Car. 5. Back home:
+PYTHONPATH=src python3 -m mlpi car-view       # live window, like the car's screen
+# 5. Car: plug the Pi into the car's USB socket, open "MirrorLink Pi" on the head unit.
+# 6. Back home, if something went wrong:
 sudo ./scripts/collect-logs.sh /dev/sdX
 ```
 
-Details: [`docs/pi-deployment.md`](docs/pi-deployment.md) (SD card),
-[`docs/field-test.md`](docs/field-test.md) (the trip),
-[`docs/laptop-dev.md`](docs/laptop-dev.md) (development),
+Step by step, with what to expect at each point:
+[`docs/pi-deployment.md`](docs/pi-deployment.md) (SD card),
+[`docs/phone-mode.md`](docs/phone-mode.md) (phone setup and use),
+[`docs/field-test.md`](docs/field-test.md) (pre-flight and the car).
+
+More: [`docs/laptop-dev.md`](docs/laptop-dev.md) (development and tests),
 [`docs/spec-notes.md`](docs/spec-notes.md) (the MirrorLink spec, clause by clause),
 [`docs/probe-phone.md`](docs/probe-phone.md) (measuring a real MirrorLink phone),
-[`docs/phone-mode.md`](docs/phone-mode.md) (mirroring an Android phone),
 [`docs/known-gaps.md`](docs/known-gaps.md) (what we know we don't know).
 
 ## Repo layout

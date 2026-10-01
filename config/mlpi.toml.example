@@ -39,8 +39,8 @@ ml_command = false
 # apps = [{name = "Waze", package = "com.waze", colour = "#33ccff"}]   # launcher tiles (max 7)
 # start_app = ""                 # open this app directly instead of the Pi launcher
 # dpi = 120                      # 120 = apps use landscape layouts; bigger = larger UI
-# max_fps = 30
-# bit_rate = 4000000
+# max_fps = 20
+# bit_rate = 3000000
 # decoder = ""                   # "h264_v4l2m2m" = try the Pi's hardware decoder
 # max_lag = 2.0                  # s behind the phone before skipping to a new keyframe
 # home_button = "right"         # right | left | top-left | top-right | bottom-left | bottom-right | off

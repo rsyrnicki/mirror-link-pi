@@ -17,18 +17,18 @@ Phone ──Wi-Fi (Pi hotspot)── H.264 video / touch ── Pi ──USB Mir
 - **While driving** the car blanks uncertified MirrorLink content (see the README). That
   needs the head unit's own setting.
 
-Tested so far without the real phone and car: the scrcpy 4.1 protocol against its own
-test vectors, and the whole chain from a fake phone streaming real H.264 to the car
-simulator. The decoder was also run on Raspberry Pi OS's own ARM64 FFmpeg 7.1 under
-emulation. The first run with the real A56 is the next step, and the desk test below is
-built for exactly that.
+**Tested** with a Samsung Galaxy A56 (Android 16, One UI) and a VW Polo's MIB2 Standard
+head unit: Google Maps, HERE WeGo, Spotify, Audible and Home Assistant, at 20 fps with
+the Pi mostly idle. Other Android phones (Android 11 or newer, for Wireless debugging)
+should work the same way, but haven't been tried.
 
 ## One-time setup
 
 ### On the laptop
 
 ```bash
-sudo apt install adb qemu-user-static ffmpeg   # ffmpeg only for the desk preview
+sudo apt install adb qemu-user-static python3-tk ffmpeg   # ffmpeg only for phone-preview
+# Fedora: sudo dnf install android-tools qemu-user-static python3-tkinter ffmpeg
 git pull
 ```
 
@@ -52,7 +52,9 @@ PYTHONPATH=src python3 -m mlpi pair-phone
 ```
 
 Phone and laptop must be on the same Wi-Fi (your home network). On the phone: Wireless
-debugging → *Pair device with pairing code*, then type the address:port and code it shows.
+debugging → *Pair device with pairing code*. The command asks for the **IP address:port**
+and the **pairing code** shown in that dialog; type them while the dialog is still open.
+It ends with "Paired.". Then prepare the SD card (next step), which copies the key.
 The key is stored in `~/.config/mlpi/adb/` on the laptop. Keep it private: it allows
 controlling your phone while Wireless debugging is on.
 
@@ -112,12 +114,15 @@ size.
 
 ## In the car
 
-1. Plug in the Pi and wait for the MirrorLink Pi app, as before.
-2. The phone joins **MirrorLink-Pi** automatically once it has been saved. Switch Wireless
-   debugging on (quick settings tile) if it's off. Android may switch it off whenever the
-   phone leaves a Wi-Fi network.
-3. Within a few seconds the car shows the phone's 800×480 display with Maps. With the
-   phone disconnected, the car shows the Pi's status screen again.
+1. Turn the car on and plug the Pi's **USB** port into the car's USB socket. After about
+   30 s the head unit lists **MirrorLink Pi** among the MirrorLink apps; open it. The car
+   shows the Pi's status screen.
+2. The first time, join the Wi-Fi **MirrorLink-Pi** on the phone (password from
+   `mlpi.toml`; ignore the "no internet" prompt). After that the phone joins by itself.
+3. Switch Wireless debugging on (quick settings tile) if it's off.
+4. Within a few seconds the car shows the Pi's launcher; tap an app. With the phone
+   disconnected, the car shows the Pi's status screen again; the Pi reconnects by
+   itself when the phone is back.
 
 The car's back key acts as Android *Back*, and Home and OK are mapped too. Other
 knob and key events are logged (`phone_key_unmapped`) so they can be mapped later.
@@ -132,8 +137,8 @@ can't be used there. So the Pi draws its own home screen for the car:
   **All apps**. Favourites that aren't installed on the phone are hidden.
 - **All apps:** every launchable app on the phone, 12 per page, alphabetical. The list
   comes from the phone itself when it connects.
-- **Home button:** a small house in the bottom-left corner of every app brings the tiles
-  back (the car's Home key does too).
+- **Home button:** a small house in the middle of the right edge, over every app, brings
+  the tiles back (`home_button` moves it, see the settings).
 
 Tiles show the app's name and initial rather than its real icon (scrcpy has no way to
 send icons). Names are drawn with the Pi's pixel font: letters are converted, e.g. Ä → AE.
@@ -150,7 +155,25 @@ send icons). Names are drawn with the Pi's pixel font: letters are converted, e.
 | `phone lost: …` | The reason is in the session log. The Pi retries every few seconds. |
 
 Everything is recorded in the session: `phone_*` events in `events.jsonl`, the scrcpy
-server's output in `phone-server.log`, and the frame rate every 10 s (`phone_fps`).
+server's output in `phone-server.log`, the frame rate and the delay behind the phone
+every 5 s (`phone_fps`), the phone's Wi-Fi link every 10 s (`wifi`) and the phone's
+network state (`phone-connectivity.txt`).
+
+## If it lags, freezes or has no internet
+
+Collect the logs (`sudo ./scripts/collect-logs.sh /dev/sdX`) and look at the **Phone:**
+and **Pi health:** sections of the session's `REPORT.txt`:
+
+| Report line | Healthy | If not |
+|---|---|---|
+| `decoded fps` | close to `max_fps` | lower `max_fps` / `bit_rate` |
+| `delay behind the phone per 5 s` | median under ~0.7 s | high with high Pi load: lower `max_fps`; with low load: Wi-Fi (next line) |
+| `phone Wi-Fi link` | signal better than about −65 dBm, few failures | move the Pi/phone, or try another `wifi_channel` (1, 6 or 11) |
+| `phone network state` → `Active default network` | the mobile network (not WIFI) | don't choose "stay connected" on the no-internet prompt; keep `avoid_bad_wifi = true` |
+| `power/thermal flags seen` | `none` | the car's USB port can't supply enough: use a better cable or a 2.4 A socket |
+
+A desktop VNC viewer (Remmina, TigerVNC) is no good for judging speed: it asks for a
+colour format the Pi has to convert in Python. Use `mlpi car-view` (desk test 2).
 
 ## Settings (`[phone]` in mlpi.toml)
 
@@ -159,8 +182,8 @@ server's output in `phone-server.log`, and the frame rate every 10 s (`phone_fps
 | `launcher` | `true` | the Pi's own launcher (below) |
 | `apps` | Google Maps, HERE WeGo, Spotify, Audible, Home Assistant, WhatsApp, Phone | home-page tiles, max 7: `apps = [{name = "Waze", package = "com.waze", colour = "#33ccff"}]` |
 | `start_app` | `""` | open this app directly instead of the launcher |
-| `dpi` | `120` | density. 120 makes the display count as a tablet, so apps use landscape layouts; higher = larger UI but portrait-only apps get side bars |
-| `max_fps` / `bit_rate` | `30` / `4000000` | lower them if the Zero 2 W can't keep up (see `phone_fps`) |
+| `dpi` | `120` | density. 120 makes the display count as a tablet, so apps use landscape layouts; higher = larger UI (160 reads well in the car) but more portrait-only apps get side bars |
+| `max_fps` / `bit_rate` | `20` / `3000000` | what the car tests ran with; lower them if the Zero 2 W can't keep up (see `phone_fps`) |
 | `decoder` | `""` (software) | `h264_v4l2m2m` tries the Pi's hardware decoder (experimental) |
 | `max_lag` | `2.0` | seconds the picture may fall behind the phone before the Pi drops the backlog and asks for a fresh keyframe (0 = never) |
 | `avoid_bad_wifi` | `true` | sets Android's "avoid bad Wi-Fi" (`network_avoid_bad_wifi=1`) on the phone so mobile data stays its internet while it is on the Pi's Wi-Fi; undo with `adb shell settings delete global network_avoid_bad_wifi` |
@@ -170,14 +193,17 @@ server's output in `phone-server.log`, and the frame rate every 10 s (`phone_fps
 | `screen_off` | `true` | turns the phone's own screen off (without locking — a locked phone blanks the car screen) |
 | `wifi_ssid` / `wifi_password` / `wifi_country` / `wifi_channel` | | the Pi's hotspot |
 
-## Open questions (to check with the real A56)
+## Good to know
 
-- Whether One UI shows its launcher on scrcpy's virtual display. If not, set `start_app`
-  (Maps is the default).
-- Whether the virtual display keeps rendering while the phone's own screen is locked.
-- Whether Android 16 switches Wireless debugging off after every Wi-Fi change.
-- Frame rate on the Zero 2 W: software H.264 decoding is expected to manage roughly
-  20–30 fps at 800×480, and the session logs will show the real number.
+- **Samsung's own launcher can't be used** on the virtual display (Android only allows a
+  stripped-down "secondary home" there), hence the Pi's launcher.
+- **Don't lock the phone** while mirroring: a locked phone blanks the car screen. The Pi
+  turns the phone's own screen off without locking it (`screen_off`).
+- **Wireless debugging** may switch itself off when the phone leaves a Wi-Fi network.
+  The quick settings tile makes switching it back on one tap.
+- **Portrait-only apps** (e.g. some audiobook apps) show with black bars left and right.
+- The phone sometimes resets Android's "avoid bad Wi-Fi" setting; the Pi sets it again
+  on every connection.
 
 ## Licences
 

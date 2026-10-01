@@ -143,8 +143,8 @@ class PhoneConfig:
     # 120 dpi makes 800x480 px count as a 1067x640 dp "tablet": apps then offer their
     # landscape layouts (at 200 dpi, portrait-only apps like Audible showed pillarboxed).
     dpi: int = 120
-    max_fps: int = 30
-    bit_rate: int = 4_000_000
+    max_fps: int = 20
+    bit_rate: int = 3_000_000
     # The Pi draws its own launcher (tiles for `apps`, a Home button over the video).
     # With start_app set, that app opens directly instead.
     launcher: bool = True
