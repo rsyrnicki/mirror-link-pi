@@ -57,6 +57,8 @@ ACTION_DOWN, ACTION_UP, ACTION_MOVE = 0, 1, 2
 POINTER_ID_GENERIC_FINGER = (1 << 64) - 2           # UINT64_C(-2)
 
 KEYCODE_HOME, KEYCODE_BACK, KEYCODE_DPAD_CENTER = 3, 4, 23
+MEDIA_KEYCODES = {"play_pause": 85, "next": 87, "previous": 88}   # KEYCODE_MEDIA_*
+STATUS_POLL_SECONDS = 30
 
 # Car keys (MirrorLink device keys, Part 2 Annex B, and plain X11 keysyms) → Android.
 KEYMAP = {
@@ -512,6 +514,7 @@ class PhoneLink:
         self._home_press = False
         self._show_video_on_frame = False
         self.device_name = ""
+        self._serial = ""
 
     # ----- helpers -----
 
@@ -589,6 +592,23 @@ class PhoneLink:
                 if any(k in line for k in self.CONNECTIVITY_KEYS)]
         self._event("phone_connectivity", lines=keys[:40])
 
+    def _poll_status(self, serial: str, stop: threading.Event) -> None:
+        """Feed the launcher's status bar: one adb call every 30 s, clock ticks between."""
+        from .phonestatus import POLL_COMMAND, parse_poll
+        while not stop.is_set() and not self._stop.is_set():
+            out = self.adb.run("shell", POLL_COMMAND, serial=serial, timeout=15)
+            if out.returncode == 0 and out.stdout:
+                self.launcher.set_state(**parse_poll(out.stdout))
+            for _ in range(STATUS_POLL_SECONDS // 5):
+                if stop.wait(5) or self._stop.is_set():
+                    return
+                self.launcher.tick()
+
+    def _set_dnd(self, on: bool) -> None:
+        out = self.adb.run("shell", "cmd", "notification", "set_dnd", "on" if on else "off",
+                           serial=self._serial, timeout=15)
+        self._event("phone_dnd", on=on, rc=out.returncode, stderr=(out.stderr or "")[:200])
+
     def _load_app_list(self, serial: str) -> None:
         """Ask the phone for its launchable apps (scrcpy's list_apps) for the
         launcher's "All apps" pages. Runs in the background once per connection."""
@@ -649,6 +669,21 @@ class PhoneLink:
             launcher.go(launcher.page - 1)
         elif kind == "next":
             launcher.go(launcher.page + 1)
+        elif kind == "media":
+            keycode = MEDIA_KEYCODES[value]
+            self._send(keycode_message(ACTION_DOWN, keycode))
+            self._send(keycode_message(ACTION_UP, keycode))
+            self._event("phone_media_key", key=value)
+        elif kind == "dnd":
+            on = not launcher.state.dnd
+            launcher.set_state(dnd=on)                # show it at once; the poll confirms
+            threading.Thread(target=self._set_dnd, args=(on,), name="phone-dnd",
+                             daemon=True).start()
+        elif kind == "screen":
+            on = not launcher.state.screen_on
+            self._send(display_power_message(on))
+            launcher.set_state(screen_on=on)
+            self._event("phone_screen", on=on)
 
     def on_pointer(self, x: int, y: int, buttons: int) -> None:
         if self._launcher_pointer(x, y, buttons):
@@ -785,6 +820,11 @@ class PhoneLink:
                                  name="phone-apps", daemon=True).start()
             threading.Thread(target=self._record_connectivity, args=(serial,),
                              name="phone-net", daemon=True).start()
+            self._serial = serial
+            status_stop = threading.Event()
+            if self.launcher:
+                threading.Thread(target=self._poll_status, args=(serial, status_stop),
+                                 name="phone-status", daemon=True).start()
             if c.start_app:
                 self._send(start_app_message(c.start_app))
                 self._show_video_on_frame = True
@@ -796,6 +836,8 @@ class PhoneLink:
                 # Locking the phone blanks the virtual display; a dark (but unlocked)
                 # screen doesn't, and saves battery.
                 self._send(display_power_message(False))
+            if self.launcher:
+                self.launcher.set_state(screen_on=not getattr(c, "screen_off", False))
             video.settimeout(10)
             parser = StreamParser(dummy_byte=False)
             config_packet = b""        # SPS/PPS: kept for decoder restarts
@@ -895,6 +937,8 @@ class PhoneLink:
                                      f"{self._video_size[1]} {fps:.0f} fps")
                     stats_t, stats_frames, lag_max = time.monotonic(), frames, 0.0
         finally:
+            if "status_stop" in locals():
+                status_stop.set()
             with self._control_lock:
                 self._control = None
             for sock in (video, control):

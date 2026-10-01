@@ -53,8 +53,11 @@ def test_config_apps_override_and_defaults():
 
 def test_home_page_has_favourites_plus_all_apps_and_pages_work():
     launcher = Launcher(VideoFrame(800, 480), list(DEFAULT_APPS))
-    kinds = [t for _box, t in launcher.targets]
+    kinds = [t for _box, t in launcher.targets if t[0] in ("app", "all")]
     assert kinds[:7] == [("app", a) for a in DEFAULT_APPS] and kinds[7] == ("all", None)
+    bar = [t for _box, t in launcher.targets if t[0] not in ("app", "all")]
+    assert bar == [("media", "previous"), ("media", "play_pause"), ("media", "next"),
+                   ("dnd", None), ("screen", None)]
     launcher.set_all_apps([App(f"App {i}", f"p.{i}") for i in range(20)])
     assert launcher.pages == 2
     launcher.go(0)
@@ -144,3 +147,41 @@ def test_home_button_positions():
     off = Launcher(VideoFrame(800, 480), [], home_button="off")
     assert off.home_rect is None and off.home_button_runs() == []
     assert not off.in_home_button(780, 240)
+
+
+def test_status_bar_buttons_control_the_phone():
+    import time
+    import types
+
+    import mlpi.phone as ph
+    sent, adb_calls = [], []
+
+    class FakeAdb:
+        def run(self, *args, serial="", timeout=20.0):
+            adb_calls.append(args)
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    switch = DisplaySwitch(Canvas(800, 480))
+    cfg = types.SimpleNamespace(adb="adb", adb_home="", launcher=True, apps=[],
+                                home_button="right")
+    link = ph.PhoneLink(cfg, switch.new_video_frame(), switch, adb=FakeAdb())
+    link._send = sent.append
+    link.show_launcher()
+
+    def tap(target):
+        box = next(b for b, t in link.launcher.targets if t == target)
+        link.on_pointer(*_center(box), 1)
+        link.on_pointer(*_center(box), 0)
+
+    tap(("media", "play_pause"))
+    assert sent == [ph.keycode_message(ph.ACTION_DOWN, 85), ph.keycode_message(ph.ACTION_UP, 85)]
+    sent.clear()
+    tap(("screen", None))
+    assert sent == [ph.display_power_message(True)] and link.launcher.state.screen_on
+    tap(("dnd", None))
+    assert link.launcher.state.dnd is True
+    for _ in range(50):
+        if adb_calls:
+            break
+        time.sleep(0.01)
+    assert adb_calls == [("shell", "cmd", "notification", "set_dnd", "on")]

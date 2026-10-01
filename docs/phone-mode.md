@@ -135,6 +135,12 @@ can't be used there. So the Pi draws its own home screen for the car:
 
 - **Home page:** large tiles for up to 7 favourite apps (`apps` in `mlpi.toml`) plus
   **All apps**. Favourites that aren't installed on the phone are hidden.
+- **Status bar** at the top of the home page, from the phone (updated every 30 s):
+  the phone's **clock**, **signal** bars with the network type (5G/4G/3G), **battery**
+  level (a bolt while charging), and buttons for **previous / play-pause / next**
+  (sent to whatever app is playing), **Do Not Disturb** (purple when on) and the
+  **phone's own screen** (blue when on; it is switched off while mirroring to save
+  battery, tap to light it up, e.g. to see a notification).
 - **All apps:** every launchable app on the phone, 12 per page, alphabetical. The list
   comes from the phone itself when it connects.
 - **Home button:** a small house in the middle of the right edge, over every app, brings

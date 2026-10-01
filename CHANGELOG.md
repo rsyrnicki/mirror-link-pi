@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Launcher status bar: the phone's clock, signal bars + network type, battery (with
+  charging bolt), media keys (previous, play/pause, next), Do Not Disturb toggle and a
+  toggle for the phone's own screen. Polled from the phone every 30 s with one adb call.
+
 ## 1.0.0 — 2026-10-01
 
 First release that works end to end in a car: a VW Polo's MIB2 Standard head unit

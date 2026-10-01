@@ -5,7 +5,8 @@ Phone launchers can't be used on scrcpy's virtual display: Android only puts a
 icons), and ordinary launchers look squashed at 800×480. So the Pi draws the home
 screen itself:
 
-  home page      large tiles for the favourite apps + an "All apps" tile
+  home page      status bar (phone clock, signal, battery, media keys, Do Not Disturb,
+                 phone screen) above large tiles for the favourite apps + "All apps"
   all-apps pages every launchable app on the phone (from scrcpy's app list), paged
   Home button    drawn over a corner of the phone's video; brings the tiles back
 
@@ -17,11 +18,13 @@ upper case only, so app names are transliterated (Ä → AE, é → E, …).
 from __future__ import annotations
 
 import re
+import threading
 import unicodedata
 import zlib
 from dataclasses import dataclass
 
 from . import canvas as cv
+from .phonestatus import PhoneState
 from .video import VideoFrame
 
 
@@ -190,7 +193,13 @@ def parse_app_list(text: str) -> list[App]:
 
 
 # ("app", App) | ("all", None) | ("home", None) | ("prev", None) | ("next", None)
+# | ("media", "previous" / "play_pause" / "next") | ("dnd", None) | ("screen", None)
 Target = tuple[str, object]
+
+ACTIVE_DND = "#7b1fa2"
+ACTIVE_SCREEN = "#1565c0"
+OFF = "#3a414b"
+GREEN, AMBER, RED = "#43a047", "#f9a825", "#e53935"
 
 
 class Launcher:
@@ -214,7 +223,10 @@ class Launcher:
         self.width, self.height = frame.width, frame.height
         self.page = -1                     # -1 = home page, 0.. = all-apps pages
         self.status = ""
+        self.state = PhoneState()
         self.targets: list[tuple[tuple[int, int, int, int], Target]] = []
+        self._lock = threading.RLock()      # drawn from the input and the polling thread
+        self._clock_shown = ""
         self.draw()
 
     # ----- pages -----
@@ -241,6 +253,23 @@ class Launcher:
     def go(self, page: int) -> None:
         self.page = max(-1, min(page, self.pages - 1))
         self.draw()
+
+    def set_state(self, **fields) -> None:
+        """Update the status bar (redrawn only if something visible changed)."""
+        with self._lock:
+            changed = False
+            for key, value in fields.items():
+                if getattr(self.state, key) != value:
+                    setattr(self.state, key, value)
+                    changed = True
+            if changed or self.state.clock() != self._clock_shown:
+                self.draw()
+
+    def tick(self) -> None:
+        """Called every few seconds: redraw when the clock's minute changes."""
+        with self._lock:
+            if self.page < 0 and self.state.clock() != self._clock_shown:
+                self.draw()
 
     # ----- drawing -----
 
@@ -276,15 +305,16 @@ class Launcher:
         p.text_centered(x + w // 2, y + (h - cv.GLYPH_H * 3) // 2, label, 3, TEXT)
 
     def draw(self) -> None:
+        with self._lock:
+            self._draw()
+
+    def _draw(self) -> None:
         buf = bytearray(self.frame.frame_bytes)
         p = Painter(buf, self.width, self.height)
         p.rect(0, 0, self.width, self.height, BG)
         self.targets = []
         if self.page < 0:
-            p.text(20, 20, "MIRRORLINK PI", 3, TEXT)
-            if self.status:
-                s = display_name(self.status)
-                p.text(self.width - 20 - cv.text_width(s, 2), 24, s, 2, DIM)
+            self._status_bar(p)
             items = [(app.name, app.tile_colour, ("app", app))
                      for app in self.visible_favourites[:7]]
             items.append(("All apps", "#3a3f47", ("all", None)))
@@ -379,10 +409,91 @@ class Launcher:
             buf[offset:offset + len(run)] = run
         return bytes(buf)
 
+    # ----- status bar -----
+
+    def _status_bar(self, p: Painter) -> None:
+        st = self.state
+        clock = st.clock()
+        self._clock_shown = clock
+        x = 16
+        if clock:
+            p.text(x, 18, clock, 4, TEXT)
+            x += cv.text_width(clock, 4) + 22
+        else:
+            p.text(x, 22, "MIRRORLINK PI", 3, TEXT)
+            x += cv.text_width("MIRRORLINK PI", 3) + 22
+        if st.signal is not None:                         # signal bars + network type
+            for i in range(4):
+                h = 6 + i * 5
+                p.rect(x + i * 8, 44 - h, 5, h, TEXT if i < st.signal else OFF)
+            x += 34
+            if st.network:
+                p.text(x, 30, st.network, 2, TEXT)
+                x += cv.text_width(st.network, 2)
+            x += 20
+        if st.battery is not None:                        # battery outline, fill, percent
+            p.rect(x, 22, 36, 20, DIM)
+            p.rect(x + 2, 24, 32, 16, BG)
+            p.rect(x + 36, 28, 3, 8, DIM)
+            fill = GREEN if st.charging or st.battery > 20 else (
+                AMBER if st.battery > 10 else RED)
+            p.rect(x + 3, 25, max(1, 30 * st.battery // 100), 14, fill)
+            if st.charging:                               # a small bolt across the battery
+                for i in range(7):
+                    p.rect(x + 20 - i, 25 + i, 3, 1, BG)
+                p.rect(x + 14, 32, 7, 1, BG)
+                for i in range(7):
+                    p.rect(x + 18 - i, 32 + i, 3, 1, BG)
+            p.text(x + 46, 26, f"{st.battery}%", 2, TEXT)
+        # right-hand buttons
+        y, h = 8, 48
+        right = self.width - 16
+        screen = (right - 64, y, 64, h)
+        dnd = (right - 64 - 10 - 64, y, 64, h)
+        nxt = (dnd[0] - 24 - 56, y, 56, h)
+        play = (nxt[0] - 8 - 56, y, 56, h)
+        prev = (play[0] - 8 - 56, y, 56, h)
+        for box, key in ((prev, "previous"), (play, "play_pause"), (nxt, "next")):
+            p.rounded(*box, 10, BUTTON)
+            self._media_icon(p, box, key)
+            self.targets.append((box, ("media", key)))
+        p.rounded(*dnd, 10, ACTIVE_DND if st.dnd else BUTTON)    # Do Not Disturb: ⊖
+        cx, cy = dnd[0] + dnd[2] // 2, y + h // 2
+        p.rounded(cx - 12, cy - 12, 24, 24, 12, TEXT if st.dnd is not None else DIM)
+        p.rect(cx - 7, cy - 2, 14, 4, ACTIVE_DND if st.dnd else BUTTON)
+        self.targets.append((dnd, ("dnd", None)))
+        p.rounded(*screen, 10, ACTIVE_SCREEN if st.screen_on else BUTTON)  # phone screen
+        cx = screen[0] + screen[2] // 2
+        p.rounded(cx - 9, y + 9, 18, 30, 3, TEXT)
+        p.rect(cx - 7, y + 13, 14, 22, "#90caf9" if st.screen_on else "#202830")
+        self.targets.append((screen, ("screen", None)))
+
+    @staticmethod
+    def _triangle(p: Painter, x: int, y: int, h: int, right: bool, colour) -> None:
+        for i in range(h):
+            w = h // 2 - abs(i - h // 2) + 1
+            p.rect(x if right else x + h // 2 + 1 - w, y + i, w, 1, colour)
+
+    def _media_icon(self, p: Painter, box, key: str) -> None:
+        x, y, w, h = box
+        cx, cy, s = x + w // 2, y + h // 2, 18
+        if key == "previous":
+            p.rect(cx - 10, cy - s // 2, 3, s, TEXT)
+            self._triangle(p, cx - 6, cy - s // 2, s, False, TEXT)
+        elif key == "next":
+            self._triangle(p, cx - 4, cy - s // 2, s, True, TEXT)
+            p.rect(cx + 7, cy - s // 2, 3, s, TEXT)
+        else:                                             # play/pause: ▶ ‖
+            self._triangle(p, cx - 13, cy - s // 2, s, True, TEXT)
+            p.rect(cx + 3, cy - s // 2, 4, s, TEXT)
+            p.rect(cx + 10, cy - s // 2, 4, s, TEXT)
+
     # ----- hit testing -----
 
     def target_at(self, x: int, y: int) -> Target | None:
-        for (tx, ty, tw, th), target in self.targets:
+        with self._lock:
+            targets = list(self.targets)
+        for (tx, ty, tw, th), target in targets:
             if tx <= x < tx + tw and ty <= y < ty + th:
                 return target
         return None
