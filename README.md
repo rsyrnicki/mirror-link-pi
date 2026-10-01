@@ -129,6 +129,9 @@ Step by step, with what to expect at each point:
 [`docs/phone-mode.md`](docs/phone-mode.md) (phone setup and use),
 [`docs/field-test.md`](docs/field-test.md) (pre-flight and the car).
 
+Tested cars and phones, and how to add yours:
+[`docs/compatibility.md`](docs/compatibility.md).
+
 More: [`docs/laptop-dev.md`](docs/laptop-dev.md) (development and tests),
 [`docs/spec-notes.md`](docs/spec-notes.md) (the MirrorLink spec, clause by clause),
 [`docs/probe-phone.md`](docs/probe-phone.md) (measuring a real MirrorLink phone),
