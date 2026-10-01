@@ -185,3 +185,43 @@ def test_status_bar_buttons_control_the_phone():
             break
         time.sleep(0.01)
     assert adb_calls == [("shell", "cmd", "notification", "set_dnd", "on")]
+
+
+def test_knob_moves_the_highlight_and_push_opens():
+    import types
+
+    import mlpi.phone as ph
+    sent = []
+    switch = DisplaySwitch(Canvas(800, 480))
+    cfg = types.SimpleNamespace(adb="adb", adb_home="", launcher=True, apps=[],
+                                home_button="right")
+    link = ph.PhoneLink(cfg, switch.new_video_frame(), switch)
+    link._send = sent.append
+    link.show_launcher()
+    assert link.launcher.focus is None
+    for keysym in (ph.KNOB_CW, ph.KNOB_CW):          # two clicks clockwise
+        link.on_key(keysym, True)
+        link.on_key(keysym, False)
+    assert link.launcher.focused()[0] == "app"
+    second_tile = link.launcher.focused()[1]
+    link.on_key(ph.KNOB_CCW, True)
+    link.on_key(ph.KNOB_CW, True)
+    assert link.launcher.focused()[1] == second_tile
+    link.on_key(ph.KNOB_PUSH, True)
+    assert sent == []                                # acts on release
+    link.on_key(ph.KNOB_PUSH, False)
+    assert sent == [ph.start_app_message(second_tile.package)]
+    assert switch.showing(link.frame)
+
+    # Inside the app the knob is a scroll wheel at the middle of the picture.
+    sent.clear()
+    link.on_key(ph.KNOB_CW, True)
+    link.on_key(ph.KNOB_CW, False)
+    assert sent == [ph.scroll_message(400, 240, 800, 480, 0.0, -1.0)]
+
+
+def test_scroll_message_matches_scrcpy_layout():
+    import mlpi.phone as ph
+    # scrcpy test_serialize_inject_scroll_event: (260, 1026) in 1080x1920, h=1, v=-1, buttons=1
+    assert ph.scroll_message(260, 1026, 1080, 1920, 1.0, -1.0, 1) == bytes([
+        3, 0, 0, 1, 4, 0, 0, 4, 2, 4, 0x38, 7, 0x80, 0x08, 0, 0xF8, 0, 0, 0, 0, 1])

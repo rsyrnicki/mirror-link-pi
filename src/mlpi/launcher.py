@@ -196,6 +196,7 @@ def parse_app_list(text: str) -> list[App]:
 # | ("media", "previous" / "play_pause" / "next") | ("dnd", None) | ("screen", None)
 Target = tuple[str, object]
 
+FOCUS = "#ffd54f"           # knob highlight
 ACTIVE_DND = "#7b1fa2"
 ACTIVE_SCREEN = "#1565c0"
 OFF = "#3a414b"
@@ -227,6 +228,7 @@ class Launcher:
         self.targets: list[tuple[tuple[int, int, int, int], Target]] = []
         self._lock = threading.RLock()      # drawn from the input and the polling thread
         self._clock_shown = ""
+        self.focus: int | None = None       # knob highlight (index into focus_order)
         self.draw()
 
     # ----- pages -----
@@ -252,7 +254,37 @@ class Launcher:
 
     def go(self, page: int) -> None:
         self.page = max(-1, min(page, self.pages - 1))
+        if self.focus is not None:
+            self.focus = 0                 # knob users: start on the first tile again
         self.draw()
+
+    # ----- knob -----
+
+    def focus_order(self) -> list[tuple[tuple[int, int, int, int], Target]]:
+        """Targets in knob order: the tiles in reading order, then the bar buttons."""
+        with self._lock:
+            targets = list(self.targets)
+        return sorted(targets, key=lambda t: (t[0][1] < self.TOP, t[0][1], t[0][0]))
+
+    def move_focus(self, step: int) -> None:
+        with self._lock:
+            n = len(self.targets)
+            if not n:
+                return
+            self.focus = 0 if self.focus is None else (self.focus + step) % n
+            self.draw()
+
+    def focused(self) -> Target | None:
+        order = self.focus_order()
+        if self.focus is None or not order:
+            return None
+        return order[min(self.focus, len(order) - 1)][1]
+
+    def clear_focus(self) -> None:
+        with self._lock:
+            if self.focus is not None:
+                self.focus = None
+                self.draw()
 
     def set_state(self, **fields) -> None:
         """Update the status bar (redrawn only if something visible changed)."""
@@ -345,6 +377,15 @@ class Launcher:
                                            self.TOP + 4), apps, strict=False):
                 self._tile(p, box, app.name, app.tile_colour, big=False)
                 self.targets.append((box, ("app", app)))
+        if self.focus is not None and self.targets:
+            order = sorted(self.targets, key=lambda t: (t[0][1] < self.TOP, t[0][1], t[0][0]))
+            self.focus = min(self.focus, len(order) - 1)
+            x, y, w, h = order[self.focus][0]
+            for i in range(4):                            # a 4 px frame around it
+                p.rect(x - 4 + i, y - 4 + i, w + 8 - 2 * i, 1, FOCUS)
+                p.rect(x - 4 + i, y + h + 3 - i, w + 8 - 2 * i, 1, FOCUS)
+                p.rect(x - 4 + i, y - 4 + i, 1, h + 8 - 2 * i, FOCUS)
+                p.rect(x + w + 3 - i, y - 4 + i, 1, h + 8 - 2 * i, FOCUS)
         self.frame.update(bytes(buf))
 
     @property

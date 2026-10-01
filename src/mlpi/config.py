@@ -158,6 +158,7 @@ class PhoneConfig:
     decoder: str = ""                    # "" = software h264; "h264_v4l2m2m" = Pi hardware
     decoder_threads: int = 1
     max_lag: float = 2.0                 # seconds behind the phone before skipping ahead
+    knob_invert: bool = False            # True: clockwise = wheel up (zoom in)
     home_button: str = "right"           # right | left | top-left | top-right |
                                          # bottom-left | bottom-right | off
     avoid_bad_wifi: bool = True          # set Android's "avoid bad Wi-Fi" so mobile data

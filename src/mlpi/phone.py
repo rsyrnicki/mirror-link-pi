@@ -48,6 +48,7 @@ CODEC_H264 = 0x68323634
 # Control message types (scrcpy app/src/control_msg.h, enum order).
 MSG_INJECT_KEYCODE = 0
 MSG_INJECT_TOUCH_EVENT = 2
+MSG_INJECT_SCROLL_EVENT = 3
 MSG_BACK_OR_SCREEN_ON = 4
 MSG_SET_DISPLAY_POWER = 10
 MSG_START_APP = 16
@@ -58,6 +59,12 @@ POINTER_ID_GENERIC_FINGER = (1 << 64) - 2           # UINT64_C(-2)
 
 KEYCODE_HOME, KEYCODE_BACK, KEYCODE_DPAD_CENTER = 3, 4, 23
 MEDIA_KEYCODES = {"play_pause": 85, "next": 87, "previous": 88}   # KEYCODE_MEDIA_*
+
+# The car's rotary knob (MirrorLink Part 2, Annex B Table B.1, knob 0).
+KNOB_RIGHT, KNOB_LEFT, KNOB_UP, KNOB_DOWN = 0x30000000, 0x30000001, 0x30000002, 0x30000005
+KNOB_PUSH = 0x30000008
+KNOB_CW, KNOB_CCW = 0x3000000E, 0x3000000F          # rotate z clockwise / anti-clockwise
+KNOB_DPAD = {KNOB_UP: 19, KNOB_DOWN: 20, KNOB_LEFT: 21, KNOB_RIGHT: 22}   # KEYCODE_DPAD_*
 STATUS_POLL_SECONDS = 30
 
 # Car keys (MirrorLink device keys, Part 2 Annex B, and plain X11 keysyms) → Android.
@@ -83,6 +90,16 @@ def touch_message(action: int, x: int, y: int, width: int, height: int, *,
 
 def keycode_message(action: int, keycode: int, *, repeat: int = 0, metastate: int = 0) -> bytes:
     return struct.pack("!BBIII", MSG_INJECT_KEYCODE, action, keycode, repeat, metastate)
+
+
+def scroll_message(x: int, y: int, width: int, height: int, hscroll: float,
+                   vscroll: float, buttons: int = 0) -> bytes:
+    """Mouse-wheel event at x, y; 1.0 = one notch. scrcpy sends the amounts as signed
+    16-bit fixed point of value/16 (ControlMessageReader.parseInjectScrollEvent)."""
+    def fp(v: float) -> int:
+        return max(-0x8000, min(0x7FFF, round(v / 16 * 0x8000)))
+    return struct.pack("!BiiHHhhi", MSG_INJECT_SCROLL_EVENT, x, y, width, height,
+                       fp(hscroll), fp(vscroll), buttons)
 
 
 def back_or_screen_on_message(action: int) -> bytes:
@@ -639,6 +656,7 @@ class PhoneLink:
             if pressed:                               # act on release, like a button
                 if self._tile_press is None:
                     self._tile_press = (x, y)
+                    self.launcher.clear_focus()       # touch users don't need the frame
             elif self._tile_press is not None:
                 target = self.launcher.target_at(*self._tile_press)
                 self._tile_press = None
@@ -711,6 +729,8 @@ class PhoneLink:
         self._send(touch_message(action, fx, fy, vw, vh, pressure=1.0 if pressed else 0.0))
 
     def on_key(self, keysym: int, down: bool) -> None:
+        if self._knob(keysym, down):
+            return
         keycode = KEYMAP.get(keysym)
         if keycode == KEYCODE_HOME and self.launcher:
             if not down:
@@ -720,6 +740,38 @@ class PhoneLink:
             self._event("phone_key_unmapped", keysym=f"0x{keysym:08x}", down=down)
             return
         self._send(keycode_message(ACTION_DOWN if down else ACTION_UP, keycode))
+
+    def _knob(self, keysym: int, down: bool) -> bool:
+        """The car's rotary knob: moves the highlight on the launcher (push opens), and
+        acts as a scroll wheel inside apps (zoom in Maps, scrolling lists)."""
+        if not KNOB_RIGHT <= keysym <= KNOB_CCW:
+            return False
+        launcher = self.launcher
+        if launcher and self.switch.showing(launcher.frame):
+            if keysym in (KNOB_CW, KNOB_RIGHT, KNOB_DOWN) and down:
+                launcher.move_focus(+1)
+            elif keysym in (KNOB_CCW, KNOB_LEFT, KNOB_UP) and down:
+                launcher.move_focus(-1)
+            elif keysym == KNOB_PUSH and not down:
+                target = launcher.focused()
+                if target is not None:
+                    self._launcher_action(target)
+            return True
+        if keysym in (KNOB_CW, KNOB_CCW):
+            if down:
+                vw, vh = self._video_size
+                notch = -1.0 if keysym == KNOB_CW else 1.0     # clockwise = wheel down
+                if getattr(self.cfg, "knob_invert", False):
+                    notch = -notch
+                self._send(scroll_message(vw // 2, vh // 2, vw, vh, 0.0, notch))
+        elif keysym == KNOB_PUSH:
+            self._send(keycode_message(ACTION_DOWN if down else ACTION_UP,
+                                       KEYCODE_DPAD_CENTER))
+        elif keysym in KNOB_DPAD:
+            self._send(keycode_message(ACTION_DOWN if down else ACTION_UP, KNOB_DPAD[keysym]))
+        else:
+            self._event("phone_key_unmapped", keysym=f"0x{keysym:08x}", down=down)
+        return True
 
     # ----- finding the phone -----
 
