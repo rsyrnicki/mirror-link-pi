@@ -9,6 +9,9 @@
 - Experimental Bluetooth audio auto-connect: variant `s6-audio-home-bt` and
   `[experiment] start_variant` for a safe trial with automatic fallback.
 - Updates over the USB cable: `prepare-sd.sh --ssh` once, then `scripts/update-pi.sh`.
+- Pairing from the car screen: open "Pair device with pairing code" on the phone, type
+  the code on the car's number pad (port found by mDNS, or typed). Shown automatically
+  when the phone is on the Pi's Wi-Fi but doesn't accept the Pi.
 - `scripts/install-sd.sh /dev/sdX`: one command downloads Raspberry Pi OS Lite
   (checksum-verified), writes it and sets up everything. The login (`mlpi`/`mlpi`,
   hostname `mlpi`) is created offline, so first boot never waits at the user wizard.

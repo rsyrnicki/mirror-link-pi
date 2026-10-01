@@ -44,6 +44,20 @@ git pull
 
 ### Pair the phone with the Pi's key
 
+**In the car (easiest):** with the phone on the Pi's Wi-Fi, open *Wireless debugging →
+Pair device with pairing code* on the phone. Within a few seconds the car screen shows a
+number pad with the phone's pairing port already filled in. Type the 6-digit code from
+the phone and tap **PAIR**; the Pi connects right after. If the port isn't found, type
+the port shown on the phone too (the number after the colon). The same screen also comes
+up by itself when the phone has been on the Pi's Wi-Fi for 20 s without accepting the Pi
+(e.g. after the phone forgot the pairing); **LATER** hides it for two minutes.
+
+Tip: Android revokes debugging authorisations that haven't been used for 7 days. Turn
+that off in *Developer options → Disable adb authorization timeout*, or the phone may
+forget the Pi between drives.
+
+**From the laptop** (alternative, before preparing the card):
+
 The phone only accepts adb connections from keys it has been paired with. The Pi can't
 show you a pairing screen, so the laptop pairs **the Pi's key** once:
 
@@ -155,7 +169,8 @@ send icons). Names are drawn with the Pi's pixel font: letters are converted, e.
 |---|---|
 | `waiting for the phone on Wi-Fi` | The phone isn't on MirrorLink-Pi. |
 | `phone on Wi-Fi, but wireless debugging is off` | Switch Wireless debugging on. (With the phone's screen off, Android ignores the usual network announcement, so the Pi also scans for the debugging port, at most every 30 s, and remembers it for next time.) |
-| `phone refused adb: pair it` | Run `mlpi pair-phone` again, then `prepare-sd.sh --phone`. |
+| `phone refused adb: pair it` | Pair on the car screen (see *Pair the phone with the Pi's key*). |
+| `phone doesn't know this Pi: pair it on the car screen` | The number pad is up: open *Pair device with pairing code* on the phone and type the code. |
 | `starting scrcpy on …` | Connected; starting the stream. |
 | `streaming … 800x480` | Working. |
 | `phone lost: …` | The reason is in the session log. The Pi retries every few seconds. |

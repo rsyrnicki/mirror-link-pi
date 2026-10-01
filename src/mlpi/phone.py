@@ -271,6 +271,8 @@ class Decoder:
 
 MDNS_ADDR = ("224.0.0.251", 5353)
 ADB_TLS_SERVICE = "_adb-tls-connect._tcp.local"
+ADB_PAIRING_SERVICE = "_adb-tls-pairing._tcp.local"   # while "Pair with code" is open
+PAIR_PAGE_AFTER = 20.0     # s on the hotspot without adb before the car shows pairing
 TYPE_A, TYPE_PTR, TYPE_SRV = 1, 12, 33
 
 
@@ -382,9 +384,10 @@ def scan_open_ports(ip: str, first: int, last: int, *, concurrency: int = 400,
     return sorted(found)
 
 
-def discover_adb_tls(interface: str, local_ip: str, *,
-                     timeout: float = 2.0) -> list[tuple[str, int]]:
-    """Ask the Wi-Fi network for wireless-debugging endpoints: [(ip, port), ...]."""
+def discover_adb_tls(interface: str, local_ip: str, *, timeout: float = 2.0,
+                     service: str = ADB_TLS_SERVICE) -> list[tuple[str, int]]:
+    """Ask the Wi-Fi network for wireless-debugging endpoints: [(ip, port), ...].
+    ``service``: the connect service, or ADB_PAIRING_SERVICE for the pairing dialog."""
     found: list[tuple[str, int]] = []
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     try:
@@ -394,7 +397,7 @@ def discover_adb_tls(interface: str, local_ip: str, *,
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(local_ip))
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
         sock.settimeout(0.5)
-        query = mdns_query()
+        query = mdns_query(service)
         deadline = time.monotonic() + timeout
         next_send = 0.0
         while time.monotonic() < deadline:
@@ -409,7 +412,9 @@ def discover_adb_tls(interface: str, local_ip: str, *,
                 answer = parse_mdns(data)
             except (struct.error, IndexError):
                 continue
-            for _instance, (target, port) in answer["srv"].items():
+            for instance, (target, port) in answer["srv"].items():
+                if not instance.rstrip(".").endswith(service):
+                    continue                  # e.g. the other adb service in the same answer
                 ip = answer["a"].get(target, src)
                 if (ip, port) not in found:
                     found.append((ip, port))
@@ -450,6 +455,12 @@ class Adb:
         out = self.run("connect", target, timeout=8)
         text = (out.stdout + out.stderr).lower()
         return "connected to" in text and "cannot" not in text and "failed" not in text
+
+    def pair(self, target: str, code: str) -> tuple[bool, str]:
+        """`adb pair HOST:PORT CODE` (Android 11+ Wireless debugging)."""
+        out = self.run("pair", target, code, timeout=25)
+        text = (out.stdout + out.stderr).strip()
+        return "successfully paired" in text.lower(), text
 
     def state(self, serial: str) -> str:
         out = self.run("get-state", serial=serial, timeout=8)
@@ -583,6 +594,15 @@ class PhoneLink:
             from .launcher import Launcher, parse_apps
             self.launcher = Launcher(switch.new_video_frame(), parse_apps(cfg.apps),
                                      home_button=getattr(cfg, "home_button", "right"))
+        # Pairing from the car screen (pairing.py) when the phone doesn't know our key.
+        self.pairing = None
+        if switch is not None:
+            from .pairing import PairingPage
+            self.pairing = PairingPage(switch.new_video_frame())
+        self._pair_press = None
+        self._pair_ip = ""
+        self._unreachable_since: float | None = None
+        self._pairing_dismissed_until = 0.0
         self._tile_press: tuple[int, int] | None = None
         self._home_press = False
         self._show_video_on_frame = False
@@ -782,6 +802,9 @@ class PhoneLink:
             self._event("phone_screen", on=on)
 
     def on_pointer(self, x: int, y: int, buttons: int) -> None:
+        if self.pairing and self.switch.showing(self.pairing.frame):
+            self._pairing_pointer(x, y, buttons)
+            return
         if self._launcher_pointer(x, y, buttons):
             return
         vw, vh = self._video_size
@@ -880,6 +903,8 @@ class PhoneLink:
                 return found
             # mDNS got no answer (screen off?): look for the port directly, at most
             # every 30 s so the phone isn't kept busy.
+            if self._offer_pairing(ip):
+                continue
             if time.monotonic() - self._last_scan >= 30:
                 self._last_scan = time.monotonic()
                 t0 = time.monotonic()
@@ -891,7 +916,77 @@ class PhoneLink:
                     return found
         if self.status.startswith("looking"):
             self._set_status("phone on Wi-Fi, but wireless debugging is off")
+        if ips and self._unreachable_since is None:
+            self._unreachable_since = time.monotonic()
+        if (ips and self.pairing and time.monotonic() - self._unreachable_since >= PAIR_PAGE_AFTER
+                and time.monotonic() >= self._pairing_dismissed_until):
+            self._show_pairing(ips[0])
         return ""
+
+    # ----- pairing from the car screen -----
+
+    def _offer_pairing(self, ip: str) -> bool:
+        """If the phone's "Pair with pairing code" dialog is open, show the number pad
+        with its port filled in. True = pairing page is up (skip the port scan)."""
+        if not self.pairing:
+            return False
+        found = [p for h, p in discover_adb_tls(self.cfg.interface, self.local_ip,
+                                                timeout=1.5, service=ADB_PAIRING_SERVICE)
+                 if h == ip]
+        if found:
+            self.pairing.set_port(found[0])
+            self._show_pairing(ip)
+            return True
+        if not self.pairing.busy:
+            self.pairing.forget_port()                    # dialog closed: port is stale
+        return False
+
+    def _show_pairing(self, ip: str) -> None:
+        self._pair_ip = ip
+        if not self.switch.showing(self.pairing.frame):
+            self.switch.show(self.pairing.frame)
+            self._event("phone_pairing_shown", ip=ip, port=self.pairing.port)
+        self._set_status("phone doesn't know this Pi: pair it on the car screen")
+
+    def _pairing_pointer(self, x: int, y: int, buttons: int) -> None:
+        pressed = bool(buttons & 1)
+        if pressed:
+            if self._pair_press is None:
+                self._pair_press = self.pairing.target_at(x, y)
+            return
+        target, self._pair_press = self._pair_press, None
+        if target is None or self.pairing.target_at(x, y) != target:
+            return
+        action = self.pairing.press(target)
+        if action == "later":
+            self._pairing_dismissed_until = time.monotonic() + 120
+            self.pairing.reset()
+            self.switch.show(self.switch.canvas)
+        elif action == "pair":
+            threading.Thread(target=self._pair, args=(self._pair_ip, self.pairing.port,
+                                                      self.pairing.code),
+                             name="phone-pair", daemon=True).start()
+
+    def _pair(self, ip: str, port: str, code: str) -> None:
+        from .pairing import BAD, GOOD
+        self.pairing.busy = True
+        self.pairing.set_message("PAIRING ...")
+        ok, text = self.adb.pair(f"{ip}:{port}", code)
+        self._event("phone_pair", target=f"{ip}:{port}", ok=ok, output=text[:300])
+        if ok:
+            self.pairing.set_message("PAIRED. CONNECTING ...", GOOD)
+            self._unreachable_since = None
+            self._last_scan = float("-inf")
+            self._stop.wait(1.5)
+            self.pairing.reset()
+            self.pairing.forget_port()
+            if self.switch.showing(self.pairing.frame):
+                self.switch.show(self.switch.canvas)
+        else:
+            self.pairing.busy = False
+            self.pairing.code = ""
+            self.pairing.field = "code"
+            self.pairing.set_message("PAIRING FAILED: CHECK CODE AND PORT", BAD)
 
     def _try_targets(self, targets: list[str]) -> str:
         for target in dict.fromkeys(targets):            # unique, in order
@@ -901,6 +996,7 @@ class PhoneLink:
             self._event("phone_adb_connect", target=target, state=state)
             if state == "device":
                 self._remember_port(target)
+                self._unreachable_since = None
                 return target
             if state == "unauthorized":
                 self._set_status("phone refused adb: pair it (docs/phone-mode.md)")
