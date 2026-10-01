@@ -32,7 +32,9 @@ It downloads the latest Raspberry Pi OS Lite (64-bit) from raspberrypi.com (cach
 `~/.cache/mlpi/images`, checksum-verified), writes it to the card and runs
 `prepare-sd.sh --phone --ssh --data-partition` on it. That's everything: phone mode,
 updates over USB, power-cut protection. Options: `--no-phone`, `--image FILE` (a
-downloaded `.img`/`.img.xz`), `--user`/`--password`/`--hostname`.
+downloaded `.img`/`.img.xz`), `--user`/`--password`/`--hostname`, and
+`--wifi-password PW` to keep the hotspot password a phone already has saved
+(otherwise a new random one is set and printed at the end).
 
 **Login on the Pi:** user `mlpi`, password `mlpi`, hostname `mlpi`. The script sets
 these up itself, offline: no Raspberry Pi Imager settings are involved, so the first

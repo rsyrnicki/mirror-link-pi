@@ -6,6 +6,7 @@
 # Usage:
 #   sudo ./scripts/install-sd.sh /dev/sdX                   # erases the whole card
 #   sudo ./scripts/install-sd.sh /dev/sdX --password secret # prepare-sd.sh options
+#   --wifi-password PW   keep the hotspot password your phone already has saved
 #   --image FILE   use a downloaded .img or .img.xz instead of the latest release
 #   --no-phone     leave out phone mode       --yes   don't ask before erasing
 #
@@ -25,7 +26,7 @@ EXTRA=()
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 say() { echo "==> $*"; }
-usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -34,7 +35,7 @@ while [[ $# -gt 0 ]]; do
         --no-phone) PHONE=(); shift ;;
         --yes) YES=1; shift ;;
         -h|--help) usage ;;
-        --user|--password|--hostname) EXTRA+=("$1" "$2"); shift 2 ;;
+        --user|--password|--hostname|--wifi-password) EXTRA+=("$1" "$2"); shift 2 ;;
         *) EXTRA+=("$1"); shift ;;
     esac
 done

@@ -286,3 +286,14 @@ def test_login_is_set_up_offline_instead_of_the_first_boot_wizard(tmp_path):
     before = (etc / "shadow").read_text()
     assert _run(boot, root).returncode == 0
     assert (etc / "shadow").read_text() == before
+
+
+def test_wifi_password_can_be_kept(tmp_path):
+    boot, root = _fake_card(tmp_path, STOCK_CONFIG)
+    env = dict(os.environ, MLPI_PHONE_SKIP_PACKAGES="1", MLPI_SCRCPY_SERVER=str(SCRIPT),
+               MLPI_ADB_KEYDIR=str(tmp_path / "nokey"))
+    out = subprocess.run(["bash", str(SCRIPT), "--phone", "--wifi-password", "XVFpq6KCQ5WJ",
+                          "--boot", str(boot), "--root", str(root)],
+                         capture_output=True, text=True, timeout=120, env=env)
+    assert out.returncode == 0, out.stderr
+    assert 'wifi_password = "XVFpq6KCQ5WJ"' in (boot / "mlpi.toml").read_text()

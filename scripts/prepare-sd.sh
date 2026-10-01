@@ -11,7 +11,8 @@
 #   qemu-user-static on this laptop),
 #   the pinned scrcpy server, and the adb key paired with `mlpi pair-phone`.
 #   The login is set up here too (default user mlpi, password mlpi, hostname mlpi;
-#   --user/--password/--hostname change it), so Raspberry Pi Imager's own settings
+#   --user/--password/--hostname change it; --wifi-password keeps the hotspot password
+#   your phone already knows), so Raspberry Pi Imager's own settings
 #   are not needed and the first boot never stops at the user-creation wizard.
 #   add --data-partition (freshly flashed card only) to put all recordings on their
 #   own partition, so a power cut can't damage the system: docs/pi-deployment.md.
@@ -42,6 +43,7 @@ NEW_USER="mlpi"
 NEW_PASSWORD="mlpi"
 NEW_HOSTNAME="mlpi"
 PASSWORD_GIVEN=0
+WIFI_PASSWORD=""
 DATA_PART="${MLPI_DATA_PART:-}"     # set by --data-partition (env: tests only)
 MOUNTED=()
 BINDS=()            # chroot bind mounts: unmounted only, never rmdir'd
@@ -51,7 +53,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 say() { echo "==> $*"; }
 
 usage() {
-    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -65,6 +67,7 @@ while [[ $# -gt 0 ]]; do
         --user) NEW_USER="$2"; shift 2 ;;
         --password) NEW_PASSWORD="$2"; PASSWORD_GIVEN=1; shift 2 ;;
         --hostname) NEW_HOSTNAME="$2"; shift 2 ;;
+        --wifi-password) WIFI_PASSWORD="$2"; shift 2 ;;
         -h|--help) usage ;;
         /dev/*) DEV="$1"; shift ;;
         *) usage ;;
@@ -123,8 +126,13 @@ if [[ -n "$DEV" ]]; then
     if [[ -n "$ROOT_SRC" ]] && lsblk -lnpo NAME "$DEV" | grep -qx "$ROOT_SRC"; then
         die "$DEV holds this laptop's root filesystem — wrong device!"
     fi
-    BOOT_PART="$(lsblk -lnpo NAME,FSTYPE "$DEV" | awk '$2=="vfat"{print $1; exit}')"
-    ROOT_PART="$(lsblk -lnpo NAME,FSTYPE "$DEV" | awk '$2=="ext4"{print $1; exit}')"
+    # Right after writing an image, udev may still be identifying the partitions.
+    for _ in $(seq 20); do
+        BOOT_PART="$(lsblk -lnpo NAME,FSTYPE "$DEV" | awk '$2=="vfat"{print $1; exit}')"
+        ROOT_PART="$(lsblk -lnpo NAME,FSTYPE "$DEV" | awk '$2=="ext4"{print $1; exit}')"
+        [[ -n "$BOOT_PART" && -n "$ROOT_PART" ]] && break
+        sleep 0.5
+    done
     [[ -n "$BOOT_PART" && -n "$ROOT_PART" ]] || \
         die "$DEV does not look like a Raspberry Pi OS card (need a vfat and an ext4 partition)"
     # Desktop environments auto-mount the card; take the partitions over.
@@ -348,7 +356,8 @@ phone_setup() {
     fi
     # 4. settings on the boot partition: enable phone mode with a random Wi-Fi password
     if ! grep -q '^\[phone\]' "$BOOT/mlpi.toml"; then
-        password="$(python3 -c 'import secrets; print(secrets.token_urlsafe(9))')"
+        password="${WIFI_PASSWORD:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(9))')}"
+        (( ${#password} >= 8 && ${#password} <= 63 )) || die "--wifi-password: 8 to 63 characters"
         printf '\n[phone]\nenabled = true\nwifi_ssid = "MirrorLink-Pi"\nwifi_password = "%s"\nwifi_country = "DE"\n' \
             "$password" >> "$BOOT/mlpi.toml"
     fi
