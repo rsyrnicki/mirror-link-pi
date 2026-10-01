@@ -138,8 +138,12 @@ size.
    disconnected, the car shows the Pi's status screen again; the Pi reconnects by
    itself when the phone is back.
 
-The car's back key acts as Android *Back*, and Home and OK are mapped too. Other
-knob and key events are logged (`phone_key_unmapped`) so they can be mapped later.
+The car's back key acts as Android *Back*, and Home and OK are mapped too. Text typed
+on the car's keyboard goes into the focused text field on the phone; right after
+typing, the keyboard's delete key deletes a character and Enter submits (otherwise
+they act as Back and OK). On the pairing page the keyboard's digits fill in the code.
+Every key the car sends is logged (`vnc_key`; unhandled ones also `phone_key_unmapped`)
+so more keys can be mapped.
 
 ## The launcher
 

@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# Copy the recorded sessions off a MirrorLink-Pi SD card and summarise them.
+# Copy the recorded sessions off a MirrorLink-Pi and summarise them.
 # Runs on the LAPTOP (Linux).
 #
 # Usage:
+#   ./scripts/collect-logs.sh --pi [user@host] [dest-dir]   # over the USB cable (SSH),
+#                                                           # card stays in the Pi
 #   sudo ./scripts/collect-logs.sh /dev/sdX [dest-dir]      # the SD card device
 #   sudo ./scripts/collect-logs.sh --root DIR [dest-dir]    # rootfs already mounted
+#
+# --pi needs a card prepared with --ssh (install-sd.sh does that); default target
+# mlpi@192.168.7.2, the Pi plugged into the laptop's USB port as for update-pi.sh.
 #
 # Result: dest-dir (default ./car-logs/<timestamp>) containing
 #   sessions/NNNN/...   one directory per Pi boot (events, pcap, journal, VNC dumps)
@@ -21,22 +26,31 @@ DEV=""
 ROOT=""
 DEST=""
 MNT=""
+PI=""
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --root) ROOT="$2"; shift 2 ;;
+        --pi)
+            PI="mlpi"
+            if [[ $# -gt 1 && "$2" != */* && "$2" != -* ]]; then PI="$2"; shift; fi
+            shift ;;
         /dev/*) DEV="$1"; shift ;;
-        -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) DEST="$1"; shift ;;
     esac
 done
-[[ $EUID -eq 0 ]] || die "run as root: sudo $0 $*"
-[[ -n "$DEV" || -n "$ROOT" ]] || die "give the SD card device (/dev/sdX) or --root DIR"
+if [[ -z "$PI" ]]; then
+    [[ $EUID -eq 0 ]] || die "run as root: sudo $0 $*"
+    [[ -n "$DEV" || -n "$ROOT" ]] || die "give --pi, the SD card device (/dev/sdX) or --root DIR"
+fi
 
 cleanup() {
-    if [[ -n "$MNT" ]]; then
+    if [[ -n "$PI" && -n "$MNT" ]]; then
+        rm -rf "$MNT"
+    elif [[ -n "$MNT" ]]; then
         umount "$MNT" 2>/dev/null || true
         rmdir "$MNT" 2>/dev/null || true
     fi
@@ -63,7 +77,22 @@ if [[ -n "$DEV" ]]; then
     fi
 fi
 
-SRC="$ROOT/var/lib/mlpi"
+if [[ -n "$PI" ]]; then
+    [[ "$PI" == *@* ]] || PI="$PI@192.168.7.2"
+    KEY="${MLPI_SSH_KEY:-$HOME/.config/mlpi/ssh/id_ed25519}"
+    [[ -f "$KEY" ]] || die "no SSH key at $KEY: the card needs prepare-sd.sh --ssh (install-sd.sh does it)"
+    MNT="$(mktemp -d /tmp/mlpi-logs.XXXX)"
+    echo "==> copying the sessions from $PI"
+    ssh -i "$KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
+        -o UserKnownHostsFile="$HOME/.config/mlpi/ssh/known_hosts" -o ConnectTimeout=10 \
+        "$PI" 'sudo tar -C /var/lib/mlpi -cf - --ignore-failed-read sessions boot-count winner-variant 2>/dev/null' \
+        | tar -C "$MNT" -xf - \
+        || die "couldn't copy from $PI (Pi plugged into the laptop? LED blinking twice?)"
+    SRC="$MNT"
+    ROOT="$MNT"
+else
+    SRC="$ROOT/var/lib/mlpi"
+fi
 if (( ${DATA_LAYOUT:-0} )); then
     SRC="$ROOT"                   # the data partition is mounted at /var/lib/mlpi
 fi

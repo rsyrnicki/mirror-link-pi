@@ -286,3 +286,25 @@ def test_phone_found_by_scan_when_mdns_is_silent(tmp_path, monkeypatch):
     assert connects == ["192.168.8.44:5555", "192.168.8.44:41669"]   # remembered: no scan
     assert scans == ["192.168.8.44"]
     session.close()
+
+
+def test_car_keyboard_types_text_and_backspace_deletes_after_typing():
+    # test_serialize_inject_text: {SC_CONTROL_MSG_TYPE_INJECT_TEXT, 0, 0, 0, 13, "hello, world!"}
+    assert ph.text_message("hello, world!") == bytes([1, 0, 0, 0, 13]) + b"hello, world!"
+    assert ph.keysym_char(0x61) == "a" and ph.keysym_char(0xE4) == "ä"
+    assert ph.keysym_char(0x010020AC) == "€" and ph.keysym_char(0xFFB7) == "7"
+    assert ph.keysym_char(0xFF08) == "" and ph.keysym_char(0x30000000) == ""
+
+    sent = []
+    link = ph.PhoneLink(types.SimpleNamespace(adb="adb", adb_home=""),
+                        types.SimpleNamespace(width=800, height=480), switch=None)
+    link._send = sent.append
+    link.on_key(0xFF08, True)                     # nothing typed yet: BackSpace = Back
+    assert sent[-1] == ph.keycode_message(0, ph.KEYCODE_BACK)
+    link.on_key(0x61, True)
+    link.on_key(0x61, False)                      # the release types nothing more
+    assert sent[-1] == ph.text_message("a")
+    link.on_key(0xFF08, True)
+    assert sent[-1] == ph.keycode_message(0, ph.KEYCODE_DEL)
+    link.on_key(0xFF0D, False)
+    assert sent[-1] == ph.keycode_message(1, ph.KEYCODE_ENTER)

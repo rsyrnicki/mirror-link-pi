@@ -119,8 +119,8 @@ sudo ./scripts/install-sd.sh /dev/sdX
 PYTHONPATH=src python3 -m mlpi simulate-car --target 192.168.7.2
 PYTHONPATH=src python3 -m mlpi car-view       # live window, like the car's screen
 # 4. Car: plug the Pi into the car's USB socket, open "MirrorLink Pi" on the head unit.
-# 5. Back home, if something went wrong:
-sudo ./scripts/collect-logs.sh /dev/sdX
+# 5. Back home, if something went wrong (Pi on the laptop's USB port, card stays in):
+./scripts/collect-logs.sh --pi                # or, card in the laptop: sudo ... /dev/sdX
 # Later updates without taking the card out (Pi on the laptop's USB port):
 ./scripts/update-pi.sh
 ```

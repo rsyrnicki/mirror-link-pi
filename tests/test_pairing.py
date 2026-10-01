@@ -122,3 +122,40 @@ def test_pairing_page_appears_at_once_when_debugging_is_on_but_key_refused(monke
     monkeypatch.setattr(ph, "scan_open_ports", lambda *a, **k: [])
     assert link._find_device() == ""
     assert switch.showing(link.pairing.frame)                 # no 20 s wait
+
+
+def test_car_keyboard_types_the_pairing_code():
+    paired = []
+
+    class FakeAdb:
+        def pair(self, target, code):
+            paired.append((target, code))
+            return False, "Failed"
+
+    switch = DisplaySwitch(Canvas(800, 480))
+    cfg = types.SimpleNamespace(adb="adb", adb_home="", interface="wlan0", launcher=False)
+    link = ph.PhoneLink(cfg, switch.new_video_frame(), switch, adb=FakeAdb())
+    link._show_pairing("192.168.8.44")
+    link.pairing.set_port(37001)
+    for keysym in (0x31, 0x32, 0x33, 0x34, 0x35, 0x39, 0xFF08, 0x36):
+        link.on_key(keysym, True)
+        link.on_key(keysym, False)
+    assert link.pairing.code == "123456"
+    link.on_key(0xFF0D, False)                                 # Return = PAIR
+    for _ in range(100):
+        if paired:
+            break
+        time.sleep(0.05)
+    assert paired == [("192.168.8.44:37001", "123456")]
+
+
+def test_connecting_without_pairing_says_so_before_leaving_the_page(monkeypatch):
+    switch = DisplaySwitch(Canvas(800, 480))
+    cfg = types.SimpleNamespace(adb="adb", adb_home="", interface="wlan0", launcher=False)
+    link = ph.PhoneLink(cfg, switch.new_video_frame(), switch)
+    link._show_pairing("192.168.8.44")
+    link.pairing.press(("digit", "4"))
+    monkeypatch.setattr(link._stop, "wait", lambda t: False)
+    link._leave_pairing()
+    assert "NO PAIRING NEEDED" not in link.pairing.message     # reset afterwards
+    assert link.pairing.code == ""

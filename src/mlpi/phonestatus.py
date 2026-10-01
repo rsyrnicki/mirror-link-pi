@@ -15,8 +15,9 @@ from dataclasses import dataclass, field
 POLL_COMMAND = (
     "dumpsys battery; echo ===; getprop gsm.network.type; echo ===; "
     "settings get global zen_mode; echo ===; date +%s,%z; echo ===; "
-    "dumpsys telephony.registry | grep mSignalStrength="
+    "dumpsys telephony.registry | grep mSignalStrength=; true"
 )
+# (`; true`: without a SIM, grep finds nothing and the shell's exit status would be 1.)
 
 # getprop gsm.network.type → what the phone's status bar would show
 _NETWORK_NAMES = (("NR", "5G"), ("LTE", "4G"), ("HSPA", "3G"), ("HSDPA", "3G"),

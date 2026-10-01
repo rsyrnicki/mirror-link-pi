@@ -49,6 +49,7 @@ CODEC_H264 = 0x68323634
 
 # Control message types (scrcpy app/src/control_msg.h, enum order).
 MSG_INJECT_KEYCODE = 0
+MSG_INJECT_TEXT = 1
 MSG_INJECT_TOUCH_EVENT = 2
 MSG_INJECT_SCROLL_EVENT = 3
 MSG_BACK_OR_SCREEN_ON = 4
@@ -60,6 +61,9 @@ ACTION_DOWN, ACTION_UP, ACTION_MOVE = 0, 1, 2
 POINTER_ID_GENERIC_FINGER = (1 << 64) - 2           # UINT64_C(-2)
 
 KEYCODE_HOME, KEYCODE_BACK, KEYCODE_DPAD_CENTER = 3, 4, 23
+KEYCODE_ENTER, KEYCODE_DEL = 66, 67
+KEY_BACKSPACE, KEY_RETURN = 0xFF08, 0xFF0D
+TYPING_WINDOW = 30.0     # s after the last typed character: BackSpace deletes, Return enters
 MEDIA_KEYCODES = {"play_pause": 85, "next": 87, "previous": 88}   # KEYCODE_MEDIA_*
 # `cmd media_session dispatch` names: delivered to the app that is playing, whatever
 # display it is on (key events injected into the virtual display don't reach it).
@@ -95,6 +99,24 @@ def touch_message(action: int, x: int, y: int, width: int, height: int, *,
 
 def keycode_message(action: int, keycode: int, *, repeat: int = 0, metastate: int = 0) -> bytes:
     return struct.pack("!BBIII", MSG_INJECT_KEYCODE, action, keycode, repeat, metastate)
+
+
+def text_message(text: str) -> bytes:
+    """INJECT_TEXT: u32 length + UTF-8 (scrcpy caps it at 300 bytes)."""
+    raw = text.encode()[:300]
+    return struct.pack("!BI", MSG_INJECT_TEXT, len(raw)) + raw
+
+
+def keysym_char(keysym: int) -> str:
+    """The character an X11/RFB keysym types, '' for function keys: Latin-1 keysyms are
+    the character itself, 0x01000000 + code point is any other Unicode character."""
+    if 0x20 <= keysym <= 0x7E or 0xA0 <= keysym <= 0xFF:
+        return chr(keysym)
+    if 0x01000100 <= keysym <= 0x0110FFFF:
+        return chr(keysym - 0x01000000)
+    if 0xFFB0 <= keysym <= 0xFFB9:                       # keypad digits
+        return chr(keysym - 0xFFB0 + ord("0"))
+    return ""
 
 
 def scroll_message(x: int, y: int, width: int, height: int, hscroll: float,
@@ -608,6 +630,7 @@ class PhoneLink:
         self._pairing_dismissed_until = 0.0
         self._tile_press: tuple[int, int] | None = None
         self._home_press = False
+        self._last_typed = float("-inf")            # monotonic time of the last typed char
         self._show_video_on_frame = False
         self.device_name = ""
         self._serial = ""
@@ -713,10 +736,24 @@ class PhoneLink:
     def _poll_status(self, serial: str, stop: threading.Event) -> None:
         """Feed the launcher's status bar: one adb call every 30 s, clock ticks between."""
         from .phonestatus import POLL_COMMAND, parse_poll
+        logged: dict | None = None
         while not stop.is_set() and not self._stop.is_set():
-            out = self.adb.run("shell", POLL_COMMAND, serial=serial, timeout=15)
-            if out.returncode == 0 and out.stdout:
-                self.launcher.set_state(**parse_poll(out.stdout))
+            try:
+                out = self.adb.run("shell", POLL_COMMAND, serial=serial, timeout=15)
+                fields = parse_poll(out.stdout) if out.stdout else {}
+                if fields:
+                    self.launcher.set_state(**fields)
+                # Log the first poll, failures and changes (not the ticking clock).
+                shown = {k: v for k, v in fields.items() if k != "clock_base"}
+                if out.returncode != 0 or shown != logged:
+                    logged = shown
+                    self._event("phone_status_poll", rc=out.returncode, **shown,
+                                stderr=(out.stderr or "")[:200],
+                                battery_raw=(out.stdout or "").split("===")[0][:600]
+                                if "battery" not in shown else "")
+            except Exception as exc:                  # keep polling; the bar is cosmetic
+                log.warning("phone status poll failed: %s", exc)
+                self._event("phone_status_poll_error", error=repr(exc)[:300])
             for _ in range(STATUS_POLL_SECONDS // 5):
                 if stop.wait(5) or self._stop.is_set():
                     return
@@ -843,7 +880,24 @@ class PhoneLink:
         self._send(touch_message(action, fx, fy, vw, vh, pressure=1.0 if pressed else 0.0))
 
     def on_key(self, keysym: int, down: bool) -> None:
+        if self.pairing and self.switch.showing(self.pairing.frame):
+            self._pairing_key(keysym, down)
+            return
         if self._knob(keysym, down):
+            return
+        char = keysym_char(keysym)
+        if char:                                     # the car's keyboard: type the text
+            if down:
+                self._last_typed = time.monotonic()
+                self._send(text_message(char))
+            return
+        typing = time.monotonic() - self._last_typed < TYPING_WINDOW
+        if typing and keysym in (KEY_BACKSPACE, KEY_RETURN):
+            # Right after typing, BackSpace deletes a character and Return submits
+            # (outside a text field they stay Back and OK).
+            self._last_typed = time.monotonic()
+            code = KEYCODE_DEL if keysym == KEY_BACKSPACE else KEYCODE_ENTER
+            self._send(keycode_message(ACTION_DOWN if down else ACTION_UP, code))
             return
         keycode = KEYMAP.get(keysym)
         if keycode == KEYCODE_HOME and self.launcher:
@@ -990,6 +1044,37 @@ class PhoneLink:
                                                       self.pairing.code),
                              name="phone-pair", daemon=True).start()
 
+    def _pairing_key(self, keysym: int, down: bool) -> None:
+        """The car's keyboard on the pairing page: digits, BackSpace, Return = PAIR."""
+        if down:
+            return
+        char = keysym_char(keysym)
+        if char.isdigit():
+            target = ("digit", char)
+        elif keysym == KEY_BACKSPACE:
+            target = ("del", None)
+        elif keysym == KEY_RETURN:
+            target = ("pair", None)
+        else:
+            return
+        if self.pairing.press(target) == "pair":
+            threading.Thread(target=self._pair, args=(self._pair_ip, self.pairing.port,
+                                                      self.pairing.code),
+                             name="phone-pair", daemon=True).start()
+
+    def _leave_pairing(self) -> None:
+        """Connected without pairing (the phone still knew this Pi's key): say so
+        instead of swapping the page away under the driver's fingers."""
+        from .pairing import GOOD
+        if not (self.pairing and self.switch.showing(self.pairing.frame)):
+            return
+        typed = bool(self.pairing.code)
+        self._event("phone_pairing_not_needed", typed=typed)
+        if typed and not self.pairing.busy:
+            self.pairing.set_message("CONNECTED. NO PAIRING NEEDED", GOOD)
+            self._stop.wait(2.5)
+        self.pairing.reset()
+
     def _pair(self, ip: str, port: str, code: str) -> None:
         from .pairing import BAD, GOOD
         self.pairing.busy = True
@@ -1114,6 +1199,7 @@ class PhoneLink:
             threading.Thread(target=self._record_connectivity, args=(serial,),
                              name="phone-net", daemon=True).start()
             self._serial = serial
+            self._leave_pairing()
             status_stop = threading.Event()
             if self.launcher:
                 threading.Thread(target=self._poll_status, args=(serial, status_stop),

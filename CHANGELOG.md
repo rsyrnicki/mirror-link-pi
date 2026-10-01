@@ -20,6 +20,12 @@
 - The phone is found with its screen off (Android ignores mDNS then): remembered adb
   port, and a port scan when mDNS stays silent.
 - Compatibility list (`docs/compatibility.md`) and a GitHub issue template for reports.
+- The car's keyboard types into the phone (and fills in the pairing code).
+- `collect-logs.sh --pi`: fetch the logs over the USB cable, card stays in the Pi.
+- Fixed: the status bar stopped updating on phones where a poll part found nothing
+  (the poll's exit status discarded the whole result); polls are now logged.
+- Fixed: the pairing page vanished mid-typing when the phone connected anyway; it now
+  says that no pairing was needed.
 
 ## 1.0.0 — 2026-10-01
 

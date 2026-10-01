@@ -127,11 +127,18 @@ Variants themselves are in `/opt/mlpi/config/variants.toml` on the rootfs (re-ru
 
 ## 6. Getting the logs back
 
+Without taking the card out (card prepared with `--ssh`, as `install-sd.sh` does): plug
+the Pi's USB port into the laptop, wait for 2 LED blinks, then
+
+```bash
+./scripts/collect-logs.sh --pi                   # → ./car-logs/<timestamp>/REPORT.txt
+```
+
+With the card in the laptop:
+
 ```bash
 sudo ./scripts/collect-logs.sh /dev/sdX          # → ./car-logs/<timestamp>/REPORT.txt
 ```
-
-Or over SSH at home: `scp -r <user>@<pi>:/var/lib/mlpi/sessions .`
 
 ## Protecting the card against power cuts
 
