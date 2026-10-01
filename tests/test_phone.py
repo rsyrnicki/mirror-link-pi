@@ -238,3 +238,51 @@ def test_fit_box_width_is_simd_safe():
     for src in ((480, 800), (720, 1600), (1080, 2340), (600, 1024)):
         x, _y, w, _h = ph.fit_box(*src, 800, 480)
         assert w % 16 == 0 and 2 * x + w <= 800
+
+
+def test_port_scan_finds_a_listener():
+    import socket as sk
+    srv = sk.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen()
+    port = srv.getsockname()[1]
+    try:
+        assert port in ph.scan_open_ports("127.0.0.1", port - 50, port + 50)
+    finally:
+        srv.close()
+
+
+def test_phone_found_by_scan_when_mdns_is_silent(tmp_path, monkeypatch):
+    """Screen off: no mDNS answer, so the Pi scans; next time it tries that port first."""
+    from mlpi.session import Session
+    connects = []
+
+    class FakeAdb:
+        def devices(self):
+            return []
+
+        def connect(self, target):
+            connects.append(target)
+            return target.endswith(":41669")
+
+        def state(self, target):
+            return "device"
+
+    scans = []
+    monkeypatch.setattr(ph, "discover_adb_tls", lambda *a, **k: [])
+    monkeypatch.setattr(ph, "scan_open_ports", lambda ip, a, b: scans.append(ip) or [41669])
+    session = Session(tmp_path / "sessions" / "0001")
+    cfg = types.SimpleNamespace(adb="adb", adb_home="", legacy_port=5555, interface="wlan0")
+    link = ph.PhoneLink(cfg, types.SimpleNamespace(width=800, height=480), switch=None,
+                        session=session, candidates=lambda: ["192.168.8.44"], adb=FakeAdb())
+    assert link._find_device() == "192.168.8.44:41669"
+    assert scans == ["192.168.8.44"]
+    assert (tmp_path / "phone-adb-port").read_text().strip() == "41669"
+
+    connects.clear()
+    link2 = ph.PhoneLink(cfg, types.SimpleNamespace(width=800, height=480), switch=None,
+                         session=session, candidates=lambda: ["192.168.8.44"], adb=FakeAdb())
+    assert link2._find_device() == "192.168.8.44:41669"
+    assert connects == ["192.168.8.44:5555", "192.168.8.44:41669"]   # remembered: no scan
+    assert scans == ["192.168.8.44"]
+    session.close()

@@ -21,9 +21,11 @@ Protocol summary for scrcpy 4.1, forward tunnel, audio off:
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import random
+import selectors
 import socket
 import struct
 import subprocess
@@ -326,6 +328,60 @@ def parse_mdns(data: bytes) -> dict:
     return out
 
 
+# Wireless debugging listens on a kernel-chosen port: Linux's ephemeral range.
+ADB_PORT_RANGE = (32768, 60999)
+
+
+def scan_open_ports(ip: str, first: int, last: int, *, concurrency: int = 400,
+                    timeout: float = 0.6, deadline: float = 30.0) -> list[int]:
+    """TCP-connect scan of ip:first..last; returns the ports that accepted.
+
+    Finds the phone's Wireless debugging port when mDNS doesn't: Android drops
+    multicast (so mDNS queries) while the screen is off, but plain unicast TCP gets
+    through. Closed ports answer with a reset at once, so ~28 000 ports take a few
+    seconds on the hotspot.
+    """
+    sel = selectors.DefaultSelector()
+    pending: dict[socket.socket, tuple[int, float]] = {}
+    found: list[int] = []
+    ports = iter(range(first, last + 1))
+    stop_at = time.monotonic() + deadline
+    exhausted = False
+    try:
+        while (pending or not exhausted) and time.monotonic() < stop_at:
+            while not exhausted and len(pending) < concurrency:
+                port = next(ports, None)
+                if port is None:
+                    exhausted = True
+                    break
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.setblocking(False)
+                rc = s.connect_ex((ip, port))
+                if rc in (0, errno.EINPROGRESS, errno.EWOULDBLOCK):
+                    pending[s] = (port, time.monotonic() + timeout)
+                    sel.register(s, selectors.EVENT_WRITE)
+                else:
+                    s.close()
+            for key, _ in sel.select(timeout=0.05):
+                s = key.fileobj
+                port, _t = pending.pop(s)
+                sel.unregister(s)
+                if s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) == 0:
+                    found.append(port)
+                s.close()
+            now = time.monotonic()
+            for s, (_port, until) in list(pending.items()):
+                if now > until:                      # no answer at all: give up on it
+                    del pending[s]
+                    sel.unregister(s)
+                    s.close()
+    finally:
+        for s in pending:
+            s.close()
+        sel.close()
+    return sorted(found)
+
+
 def discover_adb_tls(interface: str, local_ip: str, *,
                      timeout: float = 2.0) -> list[tuple[str, int]]:
     """Ask the Wi-Fi network for wireless-debugging endpoints: [(ip, port), ...]."""
@@ -532,6 +588,7 @@ class PhoneLink:
         self._show_video_on_frame = False
         self.device_name = ""
         self._serial = ""
+        self._last_scan = float("-inf")
 
     # ----- helpers -----
 
@@ -812,21 +869,65 @@ class PhoneLink:
             return ""
         for ip in ips:
             targets = [f"{ip}:{self.cfg.legacy_port}"] if self.cfg.legacy_port else []
+            last = self._remembered_port()
+            if last:
+                targets.append(f"{ip}:{last}")
             self._set_status(f"looking for wireless debugging on {ip}")
             targets += [f"{h}:{p}" for h, p in discover_adb_tls(
                 self.cfg.interface, self.local_ip) if h == ip]
-            for target in targets:
-                if not self.adb.connect(target):
-                    continue
-                state = self.adb.state(target)
-                self._event("phone_adb_connect", target=target, state=state)
-                if state == "device":
-                    return target
-                if state == "unauthorized":
-                    self._set_status("phone refused adb: pair it (docs/phone-mode.md)")
+            found = self._try_targets(targets)
+            if found:
+                return found
+            # mDNS got no answer (screen off?): look for the port directly, at most
+            # every 30 s so the phone isn't kept busy.
+            if time.monotonic() - self._last_scan >= 30:
+                self._last_scan = time.monotonic()
+                t0 = time.monotonic()
+                ports = scan_open_ports(ip, *ADB_PORT_RANGE)
+                self._event("phone_port_scan", ip=ip, open=ports[:10],
+                            seconds=round(time.monotonic() - t0, 1))
+                found = self._try_targets([f"{ip}:{p}" for p in ports[:10]])
+                if found:
+                    return found
         if self.status.startswith("looking"):
             self._set_status("phone on Wi-Fi, but wireless debugging is off")
         return ""
+
+    def _try_targets(self, targets: list[str]) -> str:
+        for target in dict.fromkeys(targets):            # unique, in order
+            if not self.adb.connect(target):
+                continue
+            state = self.adb.state(target)
+            self._event("phone_adb_connect", target=target, state=state)
+            if state == "device":
+                self._remember_port(target)
+                return target
+            if state == "unauthorized":
+                self._set_status("phone refused adb: pair it (docs/phone-mode.md)")
+        return ""
+
+    def _port_file(self) -> Path | None:
+        if not self.session:
+            return None
+        return self.session.directory.parent.parent / "phone-adb-port"
+
+    def _remembered_port(self) -> int:
+        path = self._port_file()
+        try:
+            return int(path.read_text().strip()) if path else 0
+        except (OSError, ValueError):
+            return 0
+
+    def _remember_port(self, target: str) -> None:
+        """Wireless debugging keeps its port until it's switched off; next time we
+        try that port first."""
+        path = self._port_file()
+        port = target.rpartition(":")[2]
+        if path and port.isdigit() and int(port) != self.cfg.legacy_port:
+            try:
+                path.write_text(port + "\n")
+            except OSError:
+                pass
 
     # ----- one streaming session -----
 

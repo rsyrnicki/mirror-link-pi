@@ -154,7 +154,7 @@ send icons). Names are drawn with the Pi's pixel font: letters are converted, e.
 | Status | Meaning / fix |
 |---|---|
 | `waiting for the phone on Wi-Fi` | The phone isn't on MirrorLink-Pi. |
-| `phone on Wi-Fi, but wireless debugging is off` | Switch Wireless debugging on. |
+| `phone on Wi-Fi, but wireless debugging is off` | Switch Wireless debugging on. (With the phone's screen off, Android ignores the usual network announcement, so the Pi also scans for the debugging port, at most every 30 s, and remembers it for next time.) |
 | `phone refused adb: pair it` | Run `mlpi pair-phone` again, then `prepare-sd.sh --phone`. |
 | `starting scrcpy on …` | Connected; starting the stream. |
 | `streaming … 800x480` | Working. |
