@@ -9,6 +9,9 @@
 - Experimental Bluetooth audio auto-connect: variant `s6-audio-home-bt` and
   `[experiment] start_variant` for a safe trial with automatic fallback.
 - Updates over the USB cable: `prepare-sd.sh --ssh` once, then `scripts/update-pi.sh`.
+- `scripts/install-sd.sh /dev/sdX`: one command downloads Raspberry Pi OS Lite
+  (checksum-verified), writes it and sets up everything. The login (`mlpi`/`mlpi`,
+  hostname `mlpi`) is created offline, so first boot never waits at the user wizard.
 - Power-cut protection: `prepare-sd.sh --data-partition` puts all recordings and state
   on their own partition and keeps the system journal in RAM.
 - The phone is found with its screen off (Android ignores mDNS then): remembered adb

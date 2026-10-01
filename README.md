@@ -106,25 +106,23 @@ debugging).
 
 ```bash
 # 0. On the laptop, once (Python 3.11+; Debian/Ubuntu package names,
-#    Fedora: sudo dnf install android-tools qemu-user-static python3-tkinter):
-sudo apt install adb qemu-user-static python3-tk
+#    Fedora: sudo dnf install android-tools qemu-user-static python3-tkinter openssl):
+sudo apt install adb qemu-user-static python3-tk openssl
 git clone https://github.com/rsyrnicki/mirror-link-pi && cd mirror-link-pi
-# 1. Flash Raspberry Pi OS Lite (64-bit) with Raspberry Pi Imager (set a user),
-#    then take the card out and put it back in.
-# 2. Phone mode only: pair the phone with the Pi's key (phone + laptop on home Wi-Fi):
+# 1. Pair the phone with the Pi's key (phone + laptop on the same home Wi-Fi):
 PYTHONPATH=src python3 -m mlpi pair-phone
-# 3. Install onto the card: --phone adds phone mode, --ssh allows updates over USB later,
-#    --data-partition protects the card against power cuts (freshly flashed cards only):
+# 2. Make the SD card: downloads Raspberry Pi OS Lite, writes it, sets everything up
+#    (phone mode, updates over USB, power-cut protection; login mlpi / mlpi):
 lsblk                                         # find the card, e.g. /dev/sdb
-sudo ./scripts/prepare-sd.sh --phone --ssh --data-partition /dev/sdX
-# 4. Pre-flight at home: card in the Pi, Pi's USB port → laptop, wait for 2 LED blinks:
+sudo ./scripts/install-sd.sh /dev/sdX
+# 3. Pre-flight at home: card in the Pi, Pi's USB port → laptop, wait for 2 LED blinks:
 PYTHONPATH=src python3 -m mlpi simulate-car --target 192.168.7.2
 PYTHONPATH=src python3 -m mlpi car-view       # live window, like the car's screen
-# 5. Car: plug the Pi into the car's USB socket, open "MirrorLink Pi" on the head unit.
-# 6. Back home, if something went wrong:
+# 4. Car: plug the Pi into the car's USB socket, open "MirrorLink Pi" on the head unit.
+# 5. Back home, if something went wrong:
 sudo ./scripts/collect-logs.sh /dev/sdX
-# Later updates without taking the card out (card prepared with --ssh, Pi on USB):
-./scripts/update-pi.sh <pi-user>@192.168.7.2
+# Later updates without taking the card out (Pi on the laptop's USB port):
+./scripts/update-pi.sh
 ```
 
 Step by step, with what to expect at each point:

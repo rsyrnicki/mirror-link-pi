@@ -10,6 +10,9 @@
 #   adb + FFmpeg's libavcodec/libswscale installed into the image (needs
 #   qemu-user-static on this laptop),
 #   the pinned scrcpy server, and the adb key paired with `mlpi pair-phone`.
+#   The login is set up here too (default user mlpi, password mlpi, hostname mlpi;
+#   --user/--password/--hostname change it), so Raspberry Pi Imager's own settings
+#   are not needed and the first boot never stops at the user-creation wizard.
 #   add --data-partition (freshly flashed card only) to put all recordings on their
 #   own partition, so a power cut can't damage the system: docs/pi-deployment.md.
 #   add --ssh to allow updates over the USB cable later (scripts/update-pi.sh):
@@ -35,6 +38,10 @@ ROOT=""
 PHONE=0
 SSH=0
 DATA=0
+NEW_USER="mlpi"
+NEW_PASSWORD="mlpi"
+NEW_HOSTNAME="mlpi"
+PASSWORD_GIVEN=0
 DATA_PART="${MLPI_DATA_PART:-}"     # set by --data-partition (env: tests only)
 MOUNTED=()
 BINDS=()            # chroot bind mounts: unmounted only, never rmdir'd
@@ -44,7 +51,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 say() { echo "==> $*"; }
 
 usage() {
-    sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -55,6 +62,9 @@ while [[ $# -gt 0 ]]; do
         --phone) PHONE=1; shift ;;
         --ssh) SSH=1; shift ;;
         --data-partition) DATA=1; shift ;;
+        --user) NEW_USER="$2"; shift 2 ;;
+        --password) NEW_PASSWORD="$2"; PASSWORD_GIVEN=1; shift 2 ;;
+        --hostname) NEW_HOSTNAME="$2"; shift 2 ;;
         -h|--help) usage ;;
         /dev/*) DEV="$1"; shift ;;
         *) usage ;;
@@ -90,9 +100,12 @@ Storage=volatile
 RuntimeMaxUse=32M
 CONF
     rm -rf "$ROOT/var/log/journal"
-    # Root already fills its partition; Pi OS's first-boot resize would only fail now
-    # that root is no longer the last partition.
-    sed -i 's# init=/usr/lib/raspberrypi-sys-mods/firstboot##' "$BOOT/cmdline.txt"
+    # Root already fills its partition. Pi OS's first-boot resize (Trixie: " resize" →
+    # parted resizepart 2 to the end of the card in the initramfs; Bookworm: the
+    # firstboot init) would now collide with the data partition, and parted can stop
+    # and wait for an answer on the console. So it must not run.
+    sed -i -e 's# init=/usr/lib/raspberrypi-sys-mods/firstboot##' -e 's# resize\b##g' \
+        "$BOOT/cmdline.txt"
     # Settings and keys written to the root fs's /var/lib/mlpi (e.g. the adb key) go
     # onto the data partition, which hides that directory once mounted.
     local mnt
@@ -388,6 +401,126 @@ CONF
     fi
     say "SSH enabled: update later with ./scripts/update-pi.sh <pi-user>@192.168.7.2"
 }
+
+# ---------- login: user, password, hostname (no Imager settings needed) ----------
+
+account_setup() {
+    # Pi OS images ship a placeholder user "pi" (uid 1000, no shell, locked). On first
+    # boot userconfig.service renames it from userconf.txt, Imager's cloud-init
+    # settings, or (if neither took) an interactive wizard on the console: the boot
+    # then waits forever on a headless Pi. We do the rename here, offline, and switch
+    # those first-boot steps off.
+    local first hash
+    first="$(awk -F: '$3==1000{print $1}' "$ROOT/etc/passwd")"
+    if [[ "$first" == "$NEW_USER" ]]; then
+        if (( PASSWORD_GIVEN )); then
+            hash="$(openssl passwd -6 "$NEW_PASSWORD")"
+            python3 - "$ROOT" "$NEW_USER" "$hash" <<'PY'
+import sys, pathlib
+root, user, hash_ = sys.argv[1:]
+p = pathlib.Path(root, "etc/shadow")
+p.write_text("".join(
+    ":".join([user, hash_] + l.split(":")[2:]) if l.split(":")[0] == user else l
+    for l in p.read_text().splitlines(True)))
+PY
+            say "password of $NEW_USER changed"
+        else
+            say "user $NEW_USER already set up"
+        fi
+        return
+    fi
+    if [[ "$first" != "pi" ]] || ! grep -q '^pi:[^:]*:1000:.*nologin' "$ROOT/etc/passwd"; then
+        say "user '${first:-?}' already set up on this card (not touching it)"
+        return
+    fi
+    [[ "$NEW_USER" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "--user: lower-case letters, digits, '-'"
+    command -v openssl >/dev/null || die "setting the password needs openssl on this laptop"
+    hash="$(openssl passwd -6 "$NEW_PASSWORD")"
+    python3 - "$ROOT" "$NEW_USER" "$hash" <<'PY'
+import pathlib, sys
+root, new, hash_ = sys.argv[1:]
+etc = pathlib.Path(root, "etc")
+
+def rewrite(name, fix):
+    p = etc / name
+    if p.exists():
+        p.write_text("".join(fix(l.rstrip("\n").split(":")) + "\n"
+                             for l in p.read_text().splitlines()))
+
+def members(field):                       # "a,pi,b" → "a,<new>,b"
+    return ",".join(new if m == "pi" else m for m in field.split(",")) if field else field
+
+def passwd(f):
+    if f[0] == "pi":
+        f[0], f[5], f[6] = new, f"/home/{new}", "/bin/bash"
+    return ":".join(f)
+
+def shadow(f):
+    if f[0] == "pi":
+        f[0], f[1] = new, hash_
+    return ":".join(f)
+
+def group(f):
+    f[0] = new if f[0] == "pi" else f[0]
+    f[3] = members(f[3])
+    return ":".join(f)
+
+def gshadow(f):
+    f[0] = new if f[0] == "pi" else f[0]
+    f[2], f[3] = members(f[2]), members(f[3])
+    return ":".join(f)
+
+def subid(f):
+    f[0] = new if f[0] == "pi" else f[0]
+    return ":".join(f)
+
+rewrite("passwd", passwd)
+rewrite("shadow", shadow)
+rewrite("group", group)
+rewrite("gshadow", gshadow)
+rewrite("subuid", subid)
+rewrite("subgid", subid)
+PY
+    if [[ -d "$ROOT/home/pi" && ! -e "$ROOT/home/$NEW_USER" ]]; then
+        mv "$ROOT/home/pi" "$ROOT/home/$NEW_USER"
+    fi
+    install -d -m 0755 "$ROOT/etc/sudoers.d"
+    echo "$NEW_USER ALL=(ALL) NOPASSWD: ALL" > "$ROOT/etc/sudoers.d/010_mlpi-nopasswd"
+    chmod 0440 "$ROOT/etc/sudoers.d/010_mlpi-nopasswd"
+    # What cancel-rename does once the user exists: wizard off, console login on.
+    rm -f "$ROOT/etc/systemd/system/multi-user.target.wants/userconfig.service"
+    install -d "$ROOT/etc/systemd/system/getty.target.wants"
+    ln -sfn /usr/lib/systemd/system/getty@.service \
+        "$ROOT/etc/systemd/system/getty.target.wants/getty@tty1.service"
+    rm -f "$ROOT/etc/ssh/sshd_config.d/rename_user.conf"
+    # cloud-init only applies Imager's settings; with the work done it must not
+    # re-create "pi" or rename the host.
+    if [[ -d "$ROOT/etc/cloud" ]]; then
+        touch "$ROOT/etc/cloud/cloud-init.disabled"
+    fi
+    rm -f "$BOOT/userconf" "$BOOT/userconf.txt" "$BOOT/firstrun.sh"
+    if (( PASSWORD_GIVEN )); then
+        say "login: user $NEW_USER, password as given"
+    else
+        say "login: user $NEW_USER, password $NEW_PASSWORD (change it with --password)"
+    fi
+}
+
+hostname_setup() {
+    local old
+    old="$(cat "$ROOT/etc/hostname" 2>/dev/null || echo raspberrypi)"
+    [[ "$old" == "$NEW_HOSTNAME" ]] && return
+    echo "$NEW_HOSTNAME" > "$ROOT/etc/hostname"
+    if grep -q '^127\.0\.1\.1' "$ROOT/etc/hosts" 2>/dev/null; then
+        sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t\t$NEW_HOSTNAME/" "$ROOT/etc/hosts"
+    else
+        printf '127.0.1.1\t\t%s\n' "$NEW_HOSTNAME" >> "$ROOT/etc/hosts"
+    fi
+    say "hostname: $NEW_HOSTNAME"
+}
+
+account_setup
+hostname_setup
 
 if (( SSH )); then
     ssh_setup

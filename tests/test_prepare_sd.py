@@ -236,3 +236,53 @@ def test_data_partition_grows_root_and_adds_mlpi_data(tmp_path):
             subprocess.run(["umount", str(mnt)])
     finally:
         subprocess.run(["losetup", "-d", dev])
+
+
+TRIXIE_PASSWD = "root:x:0:0:root:/root:/bin/bash\npi:x:1000:1000::/home/pi:/usr/sbin/nologin\n"
+TRIXIE_SHADOW = "root:*:20711:0:99999:7:::\npi:!:20711:0:99999:7:::\n"
+TRIXIE_GROUP = "adm:x:4:pi\nsudo:x:27:pi\nvideo:x:44:pi\npi:x:1000:\n"
+TRIXIE_GSHADOW = "adm:*::pi\nsudo:*::pi\nvideo:*::pi\npi:!::\n"
+
+
+@pytest.mark.skipif(not shutil.which("openssl"), reason="needs openssl")
+def test_login_is_set_up_offline_instead_of_the_first_boot_wizard(tmp_path):
+    boot, root = _fake_card(tmp_path, STOCK_CONFIG)
+    etc = root / "etc"
+    (etc / "passwd").write_text(TRIXIE_PASSWD)
+    (etc / "shadow").write_text(TRIXIE_SHADOW)
+    (etc / "group").write_text(TRIXIE_GROUP)
+    (etc / "gshadow").write_text(TRIXIE_GSHADOW)
+    (etc / "subuid").write_text("pi:100000:65536\n")
+    (etc / "hostname").write_text("raspberrypi\n")
+    (etc / "hosts").write_text("127.0.0.1\tlocalhost\n127.0.1.1\t\traspberrypi\n")
+    (etc / "cloud").mkdir()
+    wants = etc / "systemd/system/multi-user.target.wants"
+    wants.mkdir(parents=True)
+    (wants / "userconfig.service").symlink_to("/usr/lib/systemd/system/userconfig.service")
+    (root / "home/pi").mkdir(parents=True)
+    (boot / "userconf.txt").write_text("someone:$6$x\n")
+    assert _run(boot, root).returncode == 0
+
+    assert (etc / "passwd").read_text().splitlines()[1] == \
+        "mlpi:x:1000:1000::/home/mlpi:/bin/bash"
+    user, hash_ = (etc / "shadow").read_text().splitlines()[1].split(":")[:2]
+    salt = hash_.split("$")[2]
+    check = subprocess.run(["openssl", "passwd", "-6", "-salt", salt, "mlpi"],
+                           capture_output=True, text=True).stdout.strip()
+    assert user == "mlpi" and check == hash_
+    assert (etc / "group").read_text() == TRIXIE_GROUP.replace("pi", "mlpi")
+    assert (etc / "gshadow").read_text().splitlines()[1] == "sudo:*::mlpi"
+    assert (etc / "subuid").read_text() == "mlpi:100000:65536\n"
+    assert (root / "home/mlpi").is_dir() and not (root / "home/pi").exists()
+    assert (etc / "sudoers.d/010_mlpi-nopasswd").read_text() == "mlpi ALL=(ALL) NOPASSWD: ALL\n"
+    assert not (wants / "userconfig.service").exists()                  # no wizard
+    assert (etc / "systemd/system/getty.target.wants/getty@tty1.service").is_symlink()
+    assert (etc / "cloud/cloud-init.disabled").exists()
+    assert not (boot / "userconf.txt").exists()
+    assert (etc / "hostname").read_text() == "mlpi\n"
+    assert "127.0.1.1\t\tmlpi" in (etc / "hosts").read_text()
+
+    # A second run leaves the user (and its password) alone.
+    before = (etc / "shadow").read_text()
+    assert _run(boot, root).returncode == 0
+    assert (etc / "shadow").read_text() == before

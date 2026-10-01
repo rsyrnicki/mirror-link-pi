@@ -13,23 +13,38 @@ tcpdump).
 from the laptop by running the image's own `apt` under QEMU, so the **laptop needs
 internet** for this step and the `qemu-user-static` package.
 
-Laptop requirements: Linux (tested on Fedora and Ubuntu), `sudo`, Python ≥ 3.11, the
-repo checked out, and for phone mode `adb` + `qemu-user-static`
-(Debian/Ubuntu: `sudo apt install adb qemu-user-static`;
-Fedora: `sudo dnf install android-tools qemu-user-static`).
+Laptop requirements: Linux (tested on Fedora and Ubuntu), `sudo`, Python ≥ 3.11,
+`openssl`, the repo checked out, and for phone mode `adb` + `qemu-user-static`
+(Debian/Ubuntu: `sudo apt install adb qemu-user-static openssl`;
+Fedora: `sudo dnf install android-tools qemu-user-static openssl`).
 
-## 1. Flash the card — Raspberry Pi Imager
+## 1. The easy way: one command
 
-1. Device: *Raspberry Pi Zero 2 W*. OS: *Raspberry Pi OS (other) → Raspberry Pi OS Lite (64-bit)*.
-2. Customisation ("Edit settings"):
-   - **set a username and password** (needed only to log in for debugging at home),
-   - Wi-Fi: optional (handy for SSH at home; irrelevant in the car),
-   - enable SSH: optional,
-   - **do not** enable any "USB gadget mode" option — MirrorLink-Pi sets up its own gadget.
-3. Write. When Imager is done, take the card out and put it back in (so both partitions
-   show up again).
+Pair the phone first ([`phone-mode.md`](phone-mode.md#pair-the-phone-with-the-pis-key)),
+then:
 
-## 2. Install MirrorLink-Pi onto the card
+```bash
+lsblk                                   # find the card, e.g. /dev/sdb or /dev/mmcblk0
+sudo ./scripts/install-sd.sh /dev/sdX   # the whole device; it asks before erasing
+```
+
+It downloads the latest Raspberry Pi OS Lite (64-bit) from raspberrypi.com (cached in
+`~/.cache/mlpi/images`, checksum-verified), writes it to the card and runs
+`prepare-sd.sh --phone --ssh --data-partition` on it. That's everything: phone mode,
+updates over USB, power-cut protection. Options: `--no-phone`, `--image FILE` (a
+downloaded `.img`/`.img.xz`), `--user`/`--password`/`--hostname`.
+
+**Login on the Pi:** user `mlpi`, password `mlpi`, hostname `mlpi`. The script sets
+these up itself, offline: no Raspberry Pi Imager settings are involved, so the first
+boot can't stop at the "create a user" screen. Use `--password` for your own.
+
+## 2. Or step by step: Raspberry Pi Imager + prepare-sd.sh
+
+1. In Imager: Device *Raspberry Pi Zero 2 W*, OS *Raspberry Pi OS (other) → Raspberry
+   Pi OS Lite (64-bit)*. When it asks about **OS customisation, choose "No"**: settings
+   made there don't always take on current images, and prepare-sd.sh sets the login.
+2. Write. Then take the card out and put it back in (so both partitions show up).
+3. Install MirrorLink-Pi onto it:
 
 ```bash
 lsblk                                   # find the card, e.g. /dev/sdb or /dev/mmcblk0
@@ -39,6 +54,8 @@ sudo ./scripts/prepare-sd.sh --phone /dev/sdX
 ```
 
 Double-check the device name with `lsblk` (size, removable): the script writes to it.
+The login becomes `mlpi`/`mlpi` with hostname `mlpi` (`--user`, `--password`,
+`--hostname` to change); a card that already has a user keeps it.
 
 Recommended on a **freshly flashed** card, before its first boot: add
 `--data-partition` (see [Protecting the card against power cuts](#protecting-the-card-against-power-cuts)).
@@ -54,7 +71,9 @@ What it writes:
 | rootfs `/etc/systemd/system/` | `mlpi.target` + 5 units, enabled at boot |
 | rootfs `/etc/mlpi/mlpi-self-signed.crt` | our self-signed test cert served on `/cert/` |
 | rootfs `/etc/NetworkManager/conf.d/99-mlpi-usb0.conf` | NetworkManager leaves `usb0` alone |
-| rootfs `/etc/systemd/journald.conf.d/mlpi.conf` | persistent journal |
+| rootfs `/etc/systemd/journald.conf.d/mlpi.conf` | persistent journal (in RAM with `--data-partition`) |
+| rootfs `/etc/passwd`, `shadow`, `group`, … | the placeholder user `pi` becomes `mlpi` with its password; the first-boot wizard and cloud-init are switched off |
+| rootfs `/etc/hostname`, `/etc/hosts` | `mlpi` |
 | rootfs `rpi-usb-gadget-ics.service` → masked | Pi OS's own USB-gadget helper can't grab `usb0` |
 | bootfs `config.txt` | `dtoverlay=dwc2,dr_mode=peripheral` (USB device mode) |
 | bootfs `mlpi.toml` | settings you can edit from any OS (see below) |
@@ -138,7 +157,7 @@ plugged into the laptop, no card swapping:
 
 ```bash
 git pull
-./scripts/update-pi.sh <pi-user>@192.168.7.2     # the user you set in Raspberry Pi Imager
+./scripts/update-pi.sh             # = mlpi@192.168.7.2; other login: ./scripts/update-pi.sh USER@192.168.7.2
 ```
 
 It copies the code over SSH, keeps the scrcpy server and every recording, and reboots
@@ -157,6 +176,8 @@ update needs one, the update says so; then run `sudo ./scripts/prepare-sd.sh --p
 ## Troubleshooting on the Pi (at home, via SSH or keyboard)
 
 ```bash
+# from the laptop, Pi on its USB port (card made with --ssh / install-sd.sh):
+ssh -i ~/.config/mlpi/ssh/id_ed25519 mlpi@192.168.7.2
 systemctl status mlpi.target 'mlpi*'
 cat /var/lib/mlpi/sessions/current/summary.txt
 journalctl -b -u mlpi-gadget -u mlpi

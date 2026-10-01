@@ -3,8 +3,8 @@
 # SD card out. Runs on the LAPTOP, as your normal user (not sudo).
 #
 # Usage:
-#   ./scripts/update-pi.sh <pi-user>@192.168.7.2       # Pi on this laptop's USB port
-#   ./scripts/update-pi.sh --no-reboot <pi-user>@<ip>
+#   ./scripts/update-pi.sh                         # mlpi@192.168.7.2: Pi on this laptop's USB
+#   ./scripts/update-pi.sh --no-reboot <user>@<ip>
 #
 # Needs a card prepared once with `prepare-sd.sh --ssh` (key login with the key in
 # ~/.config/mlpi/ssh/). Copies src, config, systemd units, scripts and docs, keeps the
@@ -24,7 +24,7 @@ while [[ $# -gt 0 ]]; do
         *) TARGET="$1"; shift ;;
     esac
 done
-[[ -n "$TARGET" ]] || { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+TARGET="${TARGET:-mlpi}"
 [[ "$TARGET" == *@* ]] || TARGET="$TARGET@192.168.7.2"
 
 KEY="${MLPI_SSH_KEY:-$HOME/.config/mlpi/ssh/id_ed25519}"
