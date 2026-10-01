@@ -51,10 +51,16 @@ RTP_APPS = [("0x00000005", 99, "out", 10500), ("0x00000006", 98, "out", 10500),
             ("0x00000007", 99, "in", 10600), ("0x00000008", 98, "in", 10600)]
 RTP_APP_IDS_INT = {int(a, 16) for a, *_ in RTP_APPS}
 
+# Bluetooth audio links (variant.bt_apps, Part 9 §5.2.3 Table 5-1): the phone's A2DP
+# (music, out) and HFP (calls, both ways). (app ID, protocolID, direction, audioType)
+BT_APPS = [("0x00000009", "BTA2DP", "out", "application"),
+           ("0x0000000A", "BTHFP", "bi", "phone")]
+BT_APP_IDS_INT = {int(a, 16): proto for a, proto, *_ in BT_APPS}
+
 APPLIST_NS = "urn:schemas-upnp-org:tmapplicationserver:applist-1-0"
 
 
-def advertised_app_ids(variant: Variant) -> list[str]:
+def advertised_app_ids(variant: Variant, bt_address: str = "") -> list[str]:
     ids = [VNC_APP_ID]
     if variant.home_app:
         ids.append(HOME_APP_ID)
@@ -62,6 +68,8 @@ def advertised_app_ids(variant: Variant) -> list[str]:
         ids.append(DAP_APP_ID)
     if variant.rtp_apps:
         ids += [a for a, *_ in RTP_APPS]
+    if variant.bt_apps and bt_address:
+        ids += [a for a, *_ in BT_APPS]
     return ids
 
 
@@ -178,7 +186,21 @@ def render_app_listing(ctx: ServerContext, variant: Variant) -> str:
                       '</audioInfo>',
                       '<resourceStatus>free</resourceStatus>', '</app>']
 
-    # 4) Device Attestation Protocol endpoint
+    # 4) Bluetooth audio links: the phone's own A2DP/HFP, so the car can use the phone's
+    #    Bluetooth for audio. No appCategory (Table 5-1: "-"); 1.0 clients may infer
+    #    the audio type from the protocolID, but we state it anyway.
+    bt = ctx.bt_address()
+    if variant.bt_apps and bt:
+        for app_id, proto, direction, audio_type in BT_APPS:
+            parts += ['<app>', f'<appID>{app_id}</appID>',
+                      f'<name>Bluetooth {"Audio" if proto == "BTA2DP" else "Phone"}</name>',
+                      allowed,
+                      f'<remotingInfo><protocolID>{proto}</protocolID>'
+                      f'<direction>{direction}</direction></remotingInfo>',
+                      f'<audioInfo><audioType>{audio_type}</audioType></audioInfo>',
+                      '<resourceStatus>free</resourceStatus>', '</app>']
+
+    # 5) Device Attestation Protocol endpoint
     if variant.dap:
         version = variant.ml_version or "1.0"
         parts += ['<app>', f'<appID>{DAP_APP_ID}</appID>', '<name>Device Attestation</name>',
@@ -313,6 +335,8 @@ class ServerContext:
     variant: Callable[[], Variant] = Variant
     # Called with a step name when the attempt progresses (e.g. "launch").
     progress: Callable[[str], None] = lambda step: None
+    # The phone's Bluetooth address (12 hex digits) for bt_apps variants; "" = unknown.
+    bt_address: Callable[[], str] = lambda: ""
 
 
 _TM_APP_EVT_PATH = "/evt/TmApplicationServer"
@@ -460,7 +484,7 @@ def _known_app(raw: str, ctx: ServerContext) -> int:
     parsed = _parse_app_id(raw)
     if parsed is None:
         raise SoapFault(810, f"Bad AppID {raw!r}")
-    listed = {int(a, 16) for a in advertised_app_ids(ctx.variant())}
+    listed = {int(a, 16) for a in advertised_app_ids(ctx.variant(), ctx.bt_address())}
     if parsed not in listed:
         raise SoapFault(811, f"Unauthorized AppID {raw!r}")
     return parsed
@@ -478,6 +502,16 @@ def _handle_launch_application(req: SoapRequest, ctx: ServerContext) -> SoapResp
         ctx.app_status.set(parsed, "Foreground")
         changed = [DAP_APP_ID]
         app_uri = f"DAP://{ctx.address}:{ctx.dap_port}"
+    elif parsed in BT_APP_IDS_INT:
+        # Part 9 Table 4-7: the URI's host is the Bluetooth address; the car then sets
+        # up the Bluetooth link to the phone (they're paired already).
+        proto = BT_APP_IDS_INT[parsed]
+        ctx.progress("bt_launch")
+        if ctx.session:
+            ctx.session.event("bt_launch", app_id=raw, protocol=proto)
+        ctx.app_status.set(parsed, "Foreground")
+        changed = [f"0x{parsed:08x}"]
+        app_uri = f"{proto}://{ctx.bt_address()}"
     elif parsed in RTP_APP_IDS_INT:
         port = next(p for a, _pl, _d, p in RTP_APPS if int(a, 16) == parsed)
         ctx.progress("rtp_launch")
@@ -494,7 +528,7 @@ def _handle_launch_application(req: SoapRequest, ctx: ServerContext) -> SoapResp
         # runs continuously; when a UI app is launched the stand-alone VNC server's
         # status is reported too (Part 9 §4.5.3.1: "foreground or background").
         ctx.app_status.set(parsed, "Foreground")
-        changed = [raw_id for raw_id in advertised_app_ids(variant)
+        changed = [raw_id for raw_id in advertised_app_ids(variant, ctx.bt_address())
                    if int(raw_id, 16) == parsed]
         if parsed == HOME_APP_ID_INT:
             ctx.app_status.set(VNC_APP_ID_INT, "Foreground")
@@ -528,7 +562,8 @@ def _handle_terminate_application(req: SoapRequest, ctx: ServerContext) -> SoapR
 def _handle_get_application_status(req: SoapRequest, ctx: ServerContext) -> SoapResponse:
     raw = req.args.get("AppID", VNC_APP_ID)
     if raw.strip() in ("*", ""):
-        targets = [(int(a, 16), a) for a in advertised_app_ids(ctx.variant())]
+        targets = [(int(a, 16), a)
+                   for a in advertised_app_ids(ctx.variant(), ctx.bt_address())]
     else:
         parsed = _parse_app_id(raw)
         if parsed is None:

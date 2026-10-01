@@ -588,12 +588,33 @@ class PhoneLink:
         self._event("phone_avoid_bad_wifi", before=before, rc=put.returncode,
                     stderr=(put.stderr or "")[:200])
 
+    def _learn_bt_address(self, serial: str) -> None:
+        """Remember the phone's Bluetooth address on the card for the next boot's
+        Bluetooth audio entries (the car asks for them before the phone connects)."""
+        from . import btaddr
+        if not self.session:
+            return
+        address = ""
+        for cmd in (("settings", "get", "secure", "bluetooth_address"),
+                    ("dumpsys", "bluetooth_manager")):
+            out = self.adb.run("shell", *cmd, serial=serial, timeout=20)
+            address = btaddr.parse_phone_output(out.stdout or "")
+            if address:
+                break
+        root = self.session.directory.parent.parent        # <root>/sessions/NNNN
+        try:
+            changed = btaddr.remember(root, address)
+        except OSError:
+            changed = False
+        self._event("phone_bt_address", found=bool(address), changed=changed)
+
     def _record_connectivity(self, serial: str) -> None:
         """Snapshot which network the phone uses for the internet (Wi-Fi to the Pi has
         none), 20 s after connecting: full dump to phone-connectivity.txt, the key
         lines as a phone_connectivity event."""
         if getattr(self.cfg, "avoid_bad_wifi", True):
             self._avoid_bad_wifi(serial)
+        self._learn_bt_address(serial)
         if self._stop.wait(20):
             return
         dump = self.adb.run("shell", "dumpsys", "connectivity", serial=serial, timeout=30)

@@ -73,6 +73,10 @@ class Variant:
     # RTP audio server + client entries for payloads 98/99, as a Galaxy S6 lists them
     # (the MIB2's client profile announces exactly those payloads).
     rtp_apps: bool = False
+    # Bluetooth A2DP + HFP audio entries and <X_connectivity><bluetooth> with the
+    # phone's address (Part 3 §6.3, Part 9 §5.2.3, Part 12): lets the car pick the
+    # phone's Bluetooth as the audio link. Needs the phone's address (see btaddr.py).
+    bt_apps: bool = False
     # <allowedProfileIDs>0</allowedProfileIDs> in every entry (the S6 does this).
     allowed_profile_ids: bool = False
     # LaunchApplication AppURI: "<scheme>://<address>:<port>" (Part 9 Table 4-7).
@@ -115,6 +119,7 @@ class VariantManager:
         session: Session | None = None,
         state_dir: Path | None = None,
         clock=time.monotonic,
+        start_variant: str = "",
     ) -> None:
         if not variants:
             raise ValueError("need at least one variant")
@@ -142,7 +147,7 @@ class VariantManager:
             self._index = self._find(fixed_variant)
             self._locked = True
         elif mode == "rotate":
-            previous = self._read_winner()
+            previous = start_variant or self._read_winner()
             if previous is not None:
                 # Start with last boot's winner so a working setup comes up first.
                 idx = self._find(previous, default=None)

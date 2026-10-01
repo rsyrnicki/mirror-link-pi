@@ -193,11 +193,36 @@ colour format the Pi has to convert in Python. Use `mlpi car-view` (desk test 2)
 | `decoder` | `""` (software) | `h264_v4l2m2m` tries the Pi's hardware decoder (experimental) |
 | `max_lag` | `2.0` | seconds the picture may fall behind the phone before the Pi drops the backlog and asks for a fresh keyframe (0 = never) |
 | `avoid_bad_wifi` | `true` | sets Android's "avoid bad Wi-Fi" (`network_avoid_bad_wifi=1`) on the phone so mobile data stays its internet while it is on the Pi's Wi-Fi; undo with `adb shell settings delete global network_avoid_bad_wifi` |
+| `bt_address` | `""` | the phone's Bluetooth address for `s6-audio-home-bt` (`""` = read it from the phone) |
+| `knob_invert` | `false` | the car's knob scrolls the other way inside apps |
 | `home_button` | `"right"` | where the Pi's Home button sits on the phone video: `right` / `left` (middle of that edge), `top-left`, `top-right`, `bottom-left`, `bottom-right`, or `off` |
 | `system_decorations` | `false` | Samsung's secondary-display launcher + navigation bar on the virtual display |
 | `keep_active` | `true` | keeps the phone awake while mirroring |
 | `screen_off` | `true` | turns the phone's own screen off (without locking — a locked phone blanks the car screen) |
 | `wifi_ssid` / `wifi_password` / `wifi_country` / `wifi_channel` | | the Pi's hotspot |
+
+## Bluetooth audio auto-connect (experimental)
+
+Normally the car doesn't switch to the phone's Bluetooth by itself while the MirrorLink
+app runs. The variant `s6-audio-home-bt` additionally tells the car that the "MirrorLink
+phone" has Bluetooth audio (A2DP for music, HFP for calls) at the phone's Bluetooth
+address, which a MirrorLink head unit may use to select the phone's Bluetooth as the
+audio source on its own. To try it, set in `mlpi.toml`:
+
+```toml
+[experiment]
+mode = "rotate"
+start_variant = "s6-audio-home-bt"
+```
+
+`rotate` matters: if the car doesn't connect with the new variant, the Pi falls back to
+`s6-audio-home` after two attempts (about 6 s), so the screen still comes up.
+
+The Pi reads the phone's Bluetooth address over adb the first time the phone connects
+and remembers it, so the entries appear **from the next boot on**. To skip that, set
+`bt_address = "AA:BB:CC:DD:EE:FF"` under `[phone]` (Settings → About phone → Status
+information → Bluetooth address). In the report, *the car launched the phone's
+Bluetooth BTA2DP* means the car took the hint.
 
 ## Good to know
 

@@ -166,6 +166,7 @@ def _variant_manager(cfg: Config, variants_file: Path, session: Session) -> Vari
             cycles_per_variant=cfg.experiment.cycles_per_variant,
             session=session,
             state_dir=Path(cfg.session.root),
+            start_variant=cfg.experiment.start_variant,
         )
     except Exception as exc:  # noqa: BLE001 - never lose a car trip to a typo
         message = f"variants unusable ({exc!r}); running the spec-1.0 default only"

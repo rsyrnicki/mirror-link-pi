@@ -39,6 +39,16 @@
 # (default 2) cycles, so 10 variants ≈ 55 s per full round.
 
 [[variant]]
+name = "s6-audio-home-bt"
+description = "s6-audio-home plus the phone's Bluetooth A2DP/HFP audio entries and Bluetooth address, so the car can use the phone's Bluetooth as the audio link. Same as s6-audio-home until the phone's address is known."
+home_app = true
+rtp_apps = true
+bt_apps = true
+allowed_profile_ids = true
+applist_namespace = false
+app_trust_level = "0x80"
+
+[[variant]]
 name = "s6-audio-home"
 description = "spec-1.0-home plus RTP audio entries and allowedProfileIDs, app list shaped like a Galaxy S6's."
 home_app = true
