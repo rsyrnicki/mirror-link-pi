@@ -166,3 +166,73 @@ def test_apply_update_keeps_vendor_and_installs_units(tmp_path):
     assert (sysd / "mlpi.service").exists() and not src.exists()
     assert "NOTE" not in out.stdout
     assert calls.read_text().split() == ["daemon-reload", "restart", "mlpi.target"]
+
+
+def _loop_card(tmp_path):
+    """A freshly flashed card as a loop device: p1 (boot), p2 (root fs), free rest."""
+    if os.geteuid() != 0 or not all(shutil.which(t) for t in
+                                    ("losetup", "sfdisk", "partx", "mkfs.ext4", "resize2fs")):
+        pytest.skip("needs root, losetup, sfdisk, partx and e2fsprogs")
+    img = tmp_path / "card.img"
+    with open(img, "wb") as fh:
+        fh.truncate(1024 * 1024 * 1024)
+    subprocess.run(["sfdisk", "-q", str(img)], input="8192,131072,c\n139264,614400,83\n",
+                   text=True, check=True)
+    out = subprocess.run(["losetup", "-f", "--show", "-P", str(img)], capture_output=True,
+                         text=True)
+    if out.returncode:
+        pytest.skip(f"no loop device: {out.stderr.strip()}")
+    dev = out.stdout.strip()
+    subprocess.run(["partx", "-a", dev], capture_output=True)
+    for n in (1, 2):                     # containers have no udev to create the nodes
+        node = f"{dev}p{n}"
+        if not os.path.exists(node):
+            major, minor = Path(f"/sys/class/block/{Path(node).name}/dev").read_text().split(":")
+            os.mknod(node, 0o600 | 0o060000, os.makedev(int(major), int(minor)))
+    subprocess.run(["mkfs.ext4", "-q", "-L", "rootfs", f"{dev}p2"], check=True)
+    return dev
+
+
+def test_data_partition_grows_root_and_adds_mlpi_data(tmp_path):
+    dev = _loop_card(tmp_path)
+    try:
+        env = dict(os.environ, MLPI_DATA_SIZE_MB="128")
+        script = REPO / "scripts" / "make-data-partition.sh"
+        out = subprocess.run([str(script), dev, f"{dev}p2"], capture_output=True, text=True,
+                             env=env, timeout=120)
+        assert out.returncode == 0, out.stderr
+        assert out.stdout.strip() == f"{dev}p3"
+        dump = subprocess.run(["sfdisk", "-d", dev], capture_output=True, text=True).stdout
+        assert "size=     1695744" in dump and "start=     1835008" in dump
+        label = subprocess.run(["blkid", "-o", "value", "-s", "LABEL", f"{dev}p3"],
+                               capture_output=True, text=True).stdout.strip()
+        assert label == "mlpi-data"
+        assert subprocess.run(["e2fsck", "-fn", f"{dev}p2"], capture_output=True).returncode == 0
+        again = subprocess.run([str(script), dev, f"{dev}p2"], capture_output=True, text=True,
+                               env=env, timeout=60)
+        assert again.returncode != 0 and "freshly flashed" in again.stderr   # never twice
+
+        # prepare-sd's part: fstab, volatile journal, no first-boot resize, state copied
+        boot, root = _fake_card(tmp_path, STOCK_CONFIG)
+        (boot / "cmdline.txt").write_text("console=serial0 root=PARTUUID=abc-02 "
+                                          "init=/usr/lib/raspberrypi-sys-mods/firstboot quiet\n")
+        (root / "etc/fstab").write_text("PARTUUID=abc-02 / ext4 defaults 0 1\n")
+        (root / "var/lib/mlpi/adb").mkdir(parents=True)
+        (root / "var/lib/mlpi/adb/adbkey").write_text("key")
+        env = dict(os.environ, MLPI_DATA_PART=f"{dev}p3")
+        out = subprocess.run(["bash", str(SCRIPT), "--boot", str(boot), "--root", str(root)],
+                             capture_output=True, text=True, timeout=120, env=env)
+        assert out.returncode == 0, out.stderr
+        fstab = (root / "etc/fstab").read_text()
+        assert "LABEL=mlpi-data  /var/lib/mlpi  ext4" in fstab and "nofail" in fstab
+        assert "Storage=volatile" in (root / "etc/systemd/journald.conf.d/mlpi.conf").read_text()
+        assert "firstboot" not in (boot / "cmdline.txt").read_text()
+        mnt = tmp_path / "data"
+        mnt.mkdir()
+        subprocess.run(["mount", f"{dev}p3", str(mnt)], check=True)
+        try:
+            assert (mnt / "adb/adbkey").read_text() == "key"
+        finally:
+            subprocess.run(["umount", str(mnt)])
+    finally:
+        subprocess.run(["losetup", "-d", dev])

@@ -40,6 +40,9 @@ sudo ./scripts/prepare-sd.sh --phone /dev/sdX
 
 Double-check the device name with `lsblk` (size, removable): the script writes to it.
 
+Recommended on a **freshly flashed** card, before its first boot: add
+`--data-partition` (see [Protecting the card against power cuts](#protecting-the-card-against-power-cuts)).
+
 If your desktop mounted the partitions already, the script unmounts and remounts
 them itself. Alternatively: `sudo ./scripts/prepare-sd.sh --boot /run/media/$USER/bootfs --root /run/media/$USER/rootfs`.
 
@@ -108,6 +111,25 @@ sudo ./scripts/collect-logs.sh /dev/sdX          # → ./car-logs/<timestamp>/RE
 ```
 
 Or over SSH at home: `scp -r <user>@<pi>:/var/lib/mlpi/sessions .`
+
+## Protecting the card against power cuts
+
+The car cuts the Pi's power without warning. Anything being written at that moment
+can be damaged, and on a normal card that includes the system itself. With
+`--data-partition` (freshly flashed card, before the first boot):
+
+- the end of the card becomes a separate partition `mlpi-data` (4 GB on cards of 16 GB
+  or more, else 2 GB) mounted at `/var/lib/mlpi`: every recording, the adb key, the
+  remembered phone details;
+- the system journal stays in RAM, so during a drive **the system partition isn't
+  written at all**;
+- the data partition is checked and repaired at boot, and if it's ever unusable the
+  Pi still starts (it then records onto the system partition).
+
+The root partition is grown to fill the rest of the card right away, so Pi OS's own
+first-boot resize is switched off. The script refuses to repartition a card that has
+been booted or used before; reflash it first. `collect-logs.sh` finds the recordings on
+either layout.
 
 ## Updating over the USB cable
 

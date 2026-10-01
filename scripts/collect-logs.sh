@@ -44,7 +44,14 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ -n "$DEV" ]]; then
-    PART="$(lsblk -lnpo NAME,FSTYPE "$DEV" | awk '$2=="ext4"{print $1; exit}')"
+    # Cards prepared with --data-partition keep the recordings on "mlpi-data".
+    PART="$(lsblk -lnpo NAME,LABEL "$DEV" | awk '$2=="mlpi-data"{print $1; exit}')"
+    DATA_LAYOUT=0
+    if [[ -n "$PART" ]]; then
+        DATA_LAYOUT=1
+    else
+        PART="$(lsblk -lnpo NAME,FSTYPE "$DEV" | awk '$2=="ext4"{print $1; exit}')"
+    fi
     [[ -n "$PART" ]] || die "no ext4 partition on $DEV"
     EXISTING="$(lsblk -lno MOUNTPOINT "$PART" | head -1)"
     if [[ -n "$EXISTING" ]]; then
@@ -57,6 +64,9 @@ if [[ -n "$DEV" ]]; then
 fi
 
 SRC="$ROOT/var/lib/mlpi"
+if (( ${DATA_LAYOUT:-0} )); then
+    SRC="$ROOT"                   # the data partition is mounted at /var/lib/mlpi
+fi
 [[ -d "$SRC/sessions" ]] || die "no $SRC/sessions on the card — did MirrorLink-Pi ever run?"
 
 DEST="${DEST:-$PWD/car-logs/$(date +%Y-%m-%d_%H%M%S)}"

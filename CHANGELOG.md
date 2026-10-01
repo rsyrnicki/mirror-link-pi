@@ -9,6 +9,10 @@
 - Experimental Bluetooth audio auto-connect: variant `s6-audio-home-bt` and
   `[experiment] start_variant` for a safe trial with automatic fallback.
 - Updates over the USB cable: `prepare-sd.sh --ssh` once, then `scripts/update-pi.sh`.
+- Power-cut protection: `prepare-sd.sh --data-partition` puts all recordings and state
+  on their own partition and keeps the system journal in RAM.
+- The phone is found with its screen off (Android ignores mDNS then): remembered adb
+  port, and a port scan when mDNS stays silent.
 - Compatibility list (`docs/compatibility.md`) and a GitHub issue template for reports.
 
 ## 1.0.0 — 2026-10-01

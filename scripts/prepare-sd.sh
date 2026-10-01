@@ -10,6 +10,8 @@
 #   adb + FFmpeg's libavcodec/libswscale installed into the image (needs
 #   qemu-user-static on this laptop),
 #   the pinned scrcpy server, and the adb key paired with `mlpi pair-phone`.
+#   add --data-partition (freshly flashed card only) to put all recordings on their
+#   own partition, so a power cut can't damage the system: docs/pi-deployment.md.
 #   add --ssh to allow updates over the USB cable later (scripts/update-pi.sh):
 #   SSH on, key login with a key made for this laptop (~/.config/mlpi/ssh/),
 #   no password login on the USB link and the phone hotspot.
@@ -32,6 +34,8 @@ BOOT=""
 ROOT=""
 PHONE=0
 SSH=0
+DATA=0
+DATA_PART="${MLPI_DATA_PART:-}"     # set by --data-partition (env: tests only)
 MOUNTED=()
 BINDS=()            # chroot bind mounts: unmounted only, never rmdir'd
 RESOLV_SAVED=0
@@ -40,7 +44,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 say() { echo "==> $*"; }
 
 usage() {
-    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -50,6 +54,7 @@ while [[ $# -gt 0 ]]; do
         --root) ROOT="$2"; shift 2 ;;
         --phone) PHONE=1; shift ;;
         --ssh) SSH=1; shift ;;
+        --data-partition) DATA=1; shift ;;
         -h|--help) usage ;;
         /dev/*) DEV="$1"; shift ;;
         *) usage ;;
@@ -70,6 +75,35 @@ cleanup() {
 }
 trap cleanup EXIT
 
+data_partition_config() {
+    # Mount it at /var/lib/mlpi. nofail: if it's ever damaged the Pi still boots
+    # (and records onto the root file system). fsck repairs it at boot (pass 2).
+    sed -i '/[[:space:]]\/var\/lib\/mlpi[[:space:]]/d' "$ROOT/etc/fstab"
+    echo "LABEL=mlpi-data  /var/lib/mlpi  ext4  defaults,noatime,commit=5,nofail,x-systemd.device-timeout=10s  0  2" \
+        >> "$ROOT/etc/fstab"
+    # The system journal stays in RAM: nothing on the root file system is written
+    # during a drive (mlpi copies the journal into each session anyway).
+    cat > "$ROOT/etc/systemd/journald.conf.d/mlpi.conf" <<'CONF'
+# MirrorLink-Pi with a data partition: journal in RAM, the root file system stays idle.
+[Journal]
+Storage=volatile
+RuntimeMaxUse=32M
+CONF
+    rm -rf "$ROOT/var/log/journal"
+    # Root already fills its partition; Pi OS's first-boot resize would only fail now
+    # that root is no longer the last partition.
+    sed -i 's# init=/usr/lib/raspberrypi-sys-mods/firstboot##' "$BOOT/cmdline.txt"
+    # Settings and keys written to the root fs's /var/lib/mlpi (e.g. the adb key) go
+    # onto the data partition, which hides that directory once mounted.
+    local mnt
+    mnt="$(mktemp -d /tmp/mlpi-data.XXXX)"
+    mount "$DATA_PART" "$mnt"
+    tar -C "$ROOT/var/lib/mlpi" --exclude=./sessions -cf - . | tar -C "$mnt" -xpf -
+    umount "$mnt"
+    rmdir "$mnt"
+    say "data partition $DATA_PART → /var/lib/mlpi"
+}
+
 if [[ -n "$DEV" ]]; then
     [[ -b "$DEV" ]] || die "$DEV is not a block device"
     ROOT_SRC="$(findmnt -no SOURCE / || true)"
@@ -86,6 +120,12 @@ if [[ -n "$DEV" ]]; then
             [[ -n "$mp" ]] && umount "$mp"
         done < <(lsblk -lno MOUNTPOINT "$part")
     done
+    DATA_PART="$(lsblk -lnpo NAME,LABEL "$DEV" | awk '$2=="mlpi-data"{print $1; exit}')"
+    [[ -n "$DATA_PART" ]] && say "data partition: $DATA_PART"
+    if (( DATA )) && [[ -z "$DATA_PART" ]]; then
+        DATA_PART="$("$REPO/scripts/make-data-partition.sh" "$DEV" "$ROOT_PART")" || \
+            die "couldn't create the data partition (card unchanged unless said otherwise above)"
+    fi
     BOOT="$(mktemp -d /tmp/mlpi-boot.XXXX)"; mount "$BOOT_PART" "$BOOT"; MOUNTED+=("$BOOT")
     ROOT="$(mktemp -d /tmp/mlpi-root.XXXX)"; mount "$ROOT_PART" "$ROOT"; MOUNTED+=("$ROOT")
     say "mounted $BOOT_PART → $BOOT, $ROOT_PART → $ROOT"
@@ -351,6 +391,12 @@ CONF
 
 if (( SSH )); then
     ssh_setup
+fi
+
+if [[ -n "$DATA_PART" ]]; then
+    data_partition_config
+elif (( DATA )); then
+    echo "WARNING: --data-partition needs the card device (/dev/sdX), not --boot/--root" >&2
 fi
 
 sync
