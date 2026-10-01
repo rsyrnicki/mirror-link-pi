@@ -133,6 +133,8 @@ Step by step, with what to expect at each point:
 Tested cars and phones, and how to add yours:
 [`docs/compatibility.md`](docs/compatibility.md).
 
+How the Pi and the car communicate, step by step: [`docs/how-it-works.md`](docs/how-it-works.md).
+
 More: [`docs/laptop-dev.md`](docs/laptop-dev.md) (development and tests),
 [`docs/spec-notes.md`](docs/spec-notes.md) (the MirrorLink spec, clause by clause),
 [`docs/probe-phone.md`](docs/probe-phone.md) (measuring a real MirrorLink phone),
