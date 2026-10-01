@@ -159,3 +159,16 @@ def test_connecting_without_pairing_says_so_before_leaving_the_page(monkeypatch)
     link._leave_pairing()
     assert "NO PAIRING NEEDED" not in link.pairing.message     # reset afterwards
     assert link.pairing.code == ""
+
+
+def test_hints_never_replace_a_pairing_result():
+    switch = DisplaySwitch(Canvas(800, 480))
+    cfg = types.SimpleNamespace(adb="adb", adb_home="", interface="wlan0", launcher=False)
+    link = ph.PhoneLink(cfg, switch.new_video_frame(), switch)
+    link._show_pairing("192.168.8.44", ph.NOT_FOUND_HINT)
+    assert link.pairing.message == ph.NOT_FOUND_HINT
+    link._show_pairing("192.168.8.44", ph.REFUSED_HINT)
+    assert link.pairing.message == ph.REFUSED_HINT
+    link.pairing.set_message("PAIRING FAILED: CHECK CODE AND PORT")
+    link._show_pairing("192.168.8.44", ph.NOT_FOUND_HINT)
+    assert link.pairing.message.startswith("PAIRING FAILED")

@@ -77,6 +77,8 @@ KNOB_CW, KNOB_CCW = 0x3000000E, 0x3000000F          # rotate z clockwise / anti-
 KNOB_DPAD = {KNOB_UP: 19, KNOB_DOWN: 20, KNOB_LEFT: 21, KNOB_RIGHT: 22}   # KEYCODE_DPAD_*
 STATUS_POLL_SECONDS = 30
 CONNECTIVITY_RECHECK_SECONDS = 120
+NOT_FOUND_HINT = "NOT FOUND: IS WIRELESS DEBUGGING ON?"
+REFUSED_HINT = "THE PHONE DOESN'T KNOW THIS PI: PAIR IT"
 
 # Car keys (MirrorLink device keys, Part 2 Annex B, and plain X11 keysyms) → Android.
 KEYMAP = {
@@ -1014,7 +1016,7 @@ class PhoneLink:
                     time.monotonic() >= self._pairing_dismissed_until:
                 # Wireless debugging is on (the phone announced it) but refuses our
                 # key: it doesn't know this Pi. Ask for pairing right away.
-                self._show_pairing(ip)
+                self._show_pairing(ip, REFUSED_HINT)
                 self._offer_pairing(ip)
                 continue
             # mDNS got no answer (screen off?): look for the port directly, at most
@@ -1032,14 +1034,16 @@ class PhoneLink:
                     return found
                 if ports and self.pairing and \
                         time.monotonic() >= self._pairing_dismissed_until:
-                    self._show_pairing(ip)                 # debugging on, key refused
+                    self._show_pairing(ip, REFUSED_HINT)   # debugging on, key refused
         if self.status.startswith("looking"):
             self._set_status("phone on Wi-Fi, but wireless debugging is off")
         if ips and self._unreachable_since is None:
             self._unreachable_since = time.monotonic()
         if (ips and self.pairing and time.monotonic() - self._unreachable_since >= PAIR_PAGE_AFTER
                 and time.monotonic() >= self._pairing_dismissed_until):
-            self._show_pairing(ips[0])
+            # Not seen at all: often just Wireless debugging off or the phone asleep
+            # (it connects by itself once that's fixed); pairing is the second guess.
+            self._show_pairing(ips[0], NOT_FOUND_HINT)
         return ""
 
     # ----- pairing from the car screen -----
@@ -1060,8 +1064,13 @@ class PhoneLink:
             self.pairing.forget_port()                    # dialog closed: port is stale
         return False
 
-    def _show_pairing(self, ip: str) -> None:
+    def _show_pairing(self, ip: str, hint: str = "") -> None:
         self._pair_ip = ip
+        # Hints replace each other, never a pairing result or what is being typed.
+        if hint and not self.pairing.code and not self.pairing.busy and \
+                self.pairing.message in ("", NOT_FOUND_HINT, REFUSED_HINT) and \
+                self.pairing.message != hint:
+            self.pairing.set_message(hint)
         if not self.switch.showing(self.pairing.frame):
             self.switch.show(self.pairing.frame)
             self._event("phone_pairing_shown", ip=ip, port=self.pairing.port)
