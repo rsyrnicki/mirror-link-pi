@@ -148,7 +148,8 @@ def render_app_listing(ctx: ServerContext, variant: Variant) -> str:
                   f'<name>{_xml_escape(ctx.home_app_name)}</name>',
                   '<description>MirrorLink-Pi status screen</description>', icon, allowed,
                   '<remotingInfo><protocolID>VNC</protocolID></remotingInfo>',
-                  '<appInfo><appCategory>0x00010001</appCategory>'
+                  '<appInfo><appCategory>'
+                  f'{_xml_escape(variant.context_app_category)}</appCategory>'
                   f'<trustLevel>{_xml_escape(variant.context_trust_level)}</trustLevel>'
                   '</appInfo>',
                   '<displayInfo><contentCategory>0x00000000</contentCategory>'

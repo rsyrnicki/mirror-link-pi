@@ -31,6 +31,7 @@ from .screen import StatusScreen
 from .session import STAGE_USB_LINK, Session
 from .ssdp import SsdpResponder
 from .variants import DEFAULT_VARIANTS_FILE, Variant, VariantManager, load_variants
+from .video import DisplaySwitch, InputRouter
 
 log = logging.getLogger("mlpi")
 
@@ -174,6 +175,45 @@ def _variant_manager(cfg: Config, variants_file: Path, session: Session) -> Vari
                               session=session)
 
 
+def _start_phone_mode(cfg: Config, phone_link, router: InputRouter, stop: threading.Event,
+                      session: Session) -> DhcpServer:
+    """Hotspot + DHCP on the Wi-Fi interface + the scrcpy link (docs/phone-mode.md)."""
+    from .phone import HotspotSettings, ensure_hotspot
+    pc = cfg.phone
+    server_ip, _, prefix = pc.address.partition("/")
+    if pc.manage_hotspot:
+        def hotspot() -> None:
+            settings = HotspotSettings(pc.interface, pc.address, pc.wifi_ssid,
+                                       pc.wifi_password, pc.wifi_country, pc.wifi_channel)
+            # NetworkManager may still be starting: retry for ~2 minutes.
+            for _attempt in range(12):
+                result = ensure_hotspot(settings)
+                log.info("phone: %s", result)
+                session.event("phone_hotspot", result=result)
+                if result.startswith("hotspot ") or result.startswith("no wifi_password") \
+                        or stop.wait(10):
+                    break
+            session.note("phone hotspot", result)
+        threading.Thread(target=hotspot, name="hotspot", daemon=True).start()
+
+    wifi_dhcp = DhcpServer(interface=pc.interface, server_ip=server_ip, prefix=int(prefix or 24),
+                           client_ip=pc.client_address, offer_router=False, offer_dns=False,
+                           session=session, is_car=False)
+
+    def serve_wifi_dhcp() -> None:
+        iface = Path("/sys/class/net") / pc.interface
+        while not iface.exists() and not stop.is_set():   # Wi-Fi may come up late
+            stop.wait(2.0)
+        if not stop.is_set():
+            wifi_dhcp.serve_forever()
+    guarded("wifi-dhcp", serve_wifi_dhcp, stop, session)
+
+    phone_link.candidates = wifi_dhcp.leased_addresses
+    router.attach_phone(phone_link.frame, phone_link)
+    guarded("phone", phone_link.run, stop, session)
+    return wifi_dhcp
+
+
 def run(cfg: Config) -> int:
     session = Session.open_for_boot(Path(cfg.session.root))
     log_path = setup_logging(cfg, session)
@@ -211,10 +251,18 @@ def run(cfg: Config) -> int:
         guarded("led", led.run, stop, session)
 
     canvas = Canvas(cfg.vnc.width, cfg.vnc.height)
+    switch = DisplaySwitch(canvas)       # what the car sees: status screen or phone
+    phone_link = None
+    if cfg.phone.enabled:
+        from .phone import PhoneLink
+        phone_link = PhoneLink(cfg.phone, switch.new_video_frame(), switch, session=session,
+                               local_ip=cfg.phone.address.partition("/")[0])
     screen = StatusScreen(
         canvas, session=session,
-        variant_name=lambda: variants.current.name + (" (LOCKED)" if variants.locked else ""))
+        variant_name=lambda: variants.current.name + (" (LOCKED)" if variants.locked else ""),
+        phone_status=(lambda: phone_link.status) if phone_link else None)
     guarded("screen", screen.run, stop, session)
+    router = InputRouter(screen, switch)
 
     http_server = DescriptorServer(cfg, address, session=session, variants=variants)
     guarded("http", http_server.serve_forever, stop, session)
@@ -235,16 +283,25 @@ def run(cfg: Config) -> int:
     rfb = None
     if cfg.vnc.enabled:
         rfb = RfbServer(
-            bind_address=address, port=cfg.network.vnc_port, canvas=canvas,
+            bind_address=address, port=cfg.network.vnc_port, canvas=switch,
             name=cfg.vnc.name, session=session,
             on_connect=lambda peer: variants.vnc_connected(),
-            screen=screen, dump_dir=session.directory, dump_limit=cfg.vnc.raw_dump_limit,
+            screen=router, dump_dir=session.directory, dump_limit=cfg.vnc.raw_dump_limit,
             ml_version=lambda: variants.current.ml_version or "1.0",
             context_info=lambda: context_info(variants.current))
         guarded("rfb", rfb.serve_forever, stop, session)
 
     dap = DapServer(bind_address=address, port=cfg.network.dap_port, session=session)
     guarded("dap", dap.serve_forever, stop, session)
+
+    from .health import HealthMonitor
+    health = HealthMonitor(session, wifi_interface=cfg.phone.interface
+                           if cfg.phone.enabled else "")
+    guarded("health", health.run, stop, session)
+
+    wifi_dhcp = None
+    if phone_link is not None:
+        wifi_dhcp = _start_phone_mode(cfg, phone_link, router, stop, session)
 
     exit_code = 0
 
@@ -268,7 +325,8 @@ def run(cfg: Config) -> int:
     try:
         stop.wait()
     finally:
-        for component in (link, dhcp, rfb, dap, ssdp, screen, led):
+        for component in (link, phone_link, wifi_dhcp, health, dhcp, rfb, dap, ssdp, screen,
+                          led):
             if component is not None:
                 component.stop()
         http_server.shutdown()

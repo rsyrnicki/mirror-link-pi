@@ -1,7 +1,11 @@
 # MirrorLink-Pi
 
 Make a Raspberry Pi Zero 2 W appear as a MirrorLink phone to a car head unit, so the
-car displays a screen rendered by the Pi (over VNC, over USB).
+car displays a screen rendered by the Pi (over VNC, over USB) — and, in **phone mode**,
+your Android phone's apps (Google Maps, Spotify, …) on the car's screen, with touch.
+
+**Version 1.0** (2026-10-01): tested end to end with a VW Polo's MIB2 Standard head unit
+(`VW-Mibstd2`) and a Samsung Galaxy A56 (Android 16). See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## First success — 2026-09-29
 
@@ -48,6 +52,21 @@ cannot pass the CCC certification check (device attestation needs a CCC-issued k
 - **Your car, your responsibility.** Connecting unofficial devices to a vehicle may
   affect its warranty. Captures in this repo have had vehicle identifiers removed
   (`scripts/scrub-captures.py`).
+- **Phone mode changes settings on your phone over adb, and that can be risky.** It
+  needs Wireless debugging switched on, and the Pi keeps an adb key that grants full
+  shell access to the phone: anyone who has the SD card (or the laptop key in
+  `~/.config/mlpi/adb/`) and can reach the phone's Wireless debugging port can control
+  it. Revoke it any time under *Developer options → Revoke USB debugging
+  authorizations*. While connected, the Pi:
+  - sets Android's "avoid bad Wi-Fi" (`network_avoid_bad_wifi=1`), which **stays set**
+    afterwards (turn off with `avoid_bad_wifi = false`; undo with
+    `adb shell settings delete global network_avoid_bad_wifi`);
+  - copies the scrcpy server into `/data/local/tmp` (`mlpi-scrcpy-list.jar` stays
+    there), creates a virtual display, keeps the phone awake and turns its own screen
+    off until the connection ends.
+
+  Use phone mode only with a phone you own, and switch Wireless debugging off when you
+  don't need it.
 
 ## How it works
 
@@ -69,21 +88,48 @@ phone), the car is the *MirrorLink Client*.
 Everything is pure Python standard library on stock Raspberry Pi OS Lite, so the SD
 card is prepared completely on the laptop and the Pi never needs internet.
 
+## Phone mode (scrcpy)
+
+The Pi mirrors an Android phone over its own Wi-Fi hotspot with
+[scrcpy](https://github.com/Genymobile/scrcpy): the phone renders an 800×480 virtual
+display, the Pi decodes it and sends it to the car through the MirrorLink session above,
+and car touches go back to the phone. The Pi draws its own launcher with big tiles for
+your favourite apps. Internet stays on the phone's mobile data; audio stays on the
+phone's Bluetooth link to the car. See [`docs/phone-mode.md`](docs/phone-mode.md).
+
 ## Quick start
 
+You need: a **Raspberry Pi Zero 2 W**, a microSD card (8 GB or more), a micro-USB
+**data** cable (USB-A or USB-C to micro-USB, to match the car's socket), a **Linux
+laptop**, and for phone mode an **Android phone** (Android 11 or newer, for Wireless
+debugging).
+
 ```bash
-# 1. Flash Raspberry Pi OS Lite (64-bit) with Raspberry Pi Imager (set a user).
-# 2. Install onto the card, from the laptop:
-sudo ./scripts/prepare-sd.sh /dev/sdX
-# 3. Pre-flight at home: Pi's USB port → laptop, then
+# 0. On the laptop, once (Python 3.11+; Debian/Ubuntu package names,
+#    Fedora: sudo dnf install android-tools qemu-user-static python3-tkinter):
+sudo apt install adb qemu-user-static python3-tk
+git clone https://github.com/rsyrnicki/mirror-link-pi && cd mirror-link-pi
+# 1. Flash Raspberry Pi OS Lite (64-bit) with Raspberry Pi Imager (set a user),
+#    then take the card out and put it back in.
+# 2. Phone mode only: pair the phone with the Pi's key (phone + laptop on home Wi-Fi):
+PYTHONPATH=src python3 -m mlpi pair-phone
+# 3. Install onto the card (--phone adds phone mode; leave it out for the Pi's own screen):
+lsblk                                         # find the card, e.g. /dev/sdb
+sudo ./scripts/prepare-sd.sh --phone /dev/sdX
+# 4. Pre-flight at home: card in the Pi, Pi's USB port → laptop, wait for 2 LED blinks:
 PYTHONPATH=src python3 -m mlpi simulate-car --target 192.168.7.2
-# 4. Car. 5. Back home:
+PYTHONPATH=src python3 -m mlpi car-view       # live window, like the car's screen
+# 5. Car: plug the Pi into the car's USB socket, open "MirrorLink Pi" on the head unit.
+# 6. Back home, if something went wrong:
 sudo ./scripts/collect-logs.sh /dev/sdX
 ```
 
-Details: [`docs/pi-deployment.md`](docs/pi-deployment.md) (SD card),
-[`docs/field-test.md`](docs/field-test.md) (the trip),
-[`docs/laptop-dev.md`](docs/laptop-dev.md) (development),
+Step by step, with what to expect at each point:
+[`docs/pi-deployment.md`](docs/pi-deployment.md) (SD card),
+[`docs/phone-mode.md`](docs/phone-mode.md) (phone setup and use),
+[`docs/field-test.md`](docs/field-test.md) (pre-flight and the car).
+
+More: [`docs/laptop-dev.md`](docs/laptop-dev.md) (development and tests),
 [`docs/spec-notes.md`](docs/spec-notes.md) (the MirrorLink spec, clause by clause),
 [`docs/probe-phone.md`](docs/probe-phone.md) (measuring a real MirrorLink phone),
 [`docs/known-gaps.md`](docs/known-gaps.md) (what we know we don't know).
@@ -92,12 +138,12 @@ Details: [`docs/pi-deployment.md`](docs/pi-deployment.md) (SD card),
 
 | Path | What |
 |---|---|
-| `src/mlpi/` | the server: `dhcp`, `ssdp`, `http_descriptor` + `soap` + `eventing`, `rfb` + `mirrorlink_vnc` + `canvas` + `screen`, `dap`, `variants`, `session`, `capture`, `gadget`, `led`, `runner` |
-| `src/mlpi/tools/` | `simulate_car` (recorded VW handshake + VNC client), `probe_phone` (drive a real phone), `report`, `discover` |
+| `src/mlpi/` | the server: `dhcp`, `ssdp`, `http_descriptor` + `soap` + `eventing`, `rfb` + `mirrorlink_vnc` + `canvas` + `screen`, `dap`, `variants`, `session`, `capture`, `gadget`, `led`, `runner`; phone mode: `phone` (scrcpy client), `avdecode` (H.264 via libavcodec), `video` (frames + source switch) |
+| `src/mlpi/tools/` | `simulate_car` (recorded VW handshake + VNC client), `car_view` (live window that behaves like the car), `probe_phone` (drive a real phone), `phone_tools` (`pair-phone`, `phone-preview`), `report`, `discover` |
 | `config/` | device descriptor template, SCPDs, `variants.toml`, `mlpi.toml.example` |
 | `systemd/` | units started at boot on the Pi |
-| `scripts/` | `prepare-sd.sh`, `collect-logs.sh`, `fetch-spec.sh` (laptop); `probe-sai-*` (VW SAI research) |
-| `captures/` | car captures from earlier sessions, CCC reference material |
+| `scripts/` | `prepare-sd.sh`, `collect-logs.sh`, `fetch-spec.sh`, `fetch-scrcpy-server.sh` (laptop); `probe-sai-*` (VW SAI research) |
+| `captures/` | car captures from earlier sessions (vehicle identifiers scrubbed) |
 | `legacy/` | Robert's original files, kept for git-blame lineage |
 
 ## License

@@ -134,8 +134,9 @@ def describe_options(options: dict[int, bytes]) -> dict[str, object]:
 class DhcpServer:
     def __init__(self, *, interface: str, server_ip: str, prefix: int, client_ip: str,
                  lease_seconds: int = 3600, offer_router: bool = True, offer_dns: bool = True,
-                 session: Session | None = None) -> None:
+                 session: Session | None = None, is_car: bool = True) -> None:
         self.interface = interface
+        self.is_car = is_car            # False: the phone's Wi-Fi lease, not a car stage
         self.server_ip = server_ip
         self.network = ipaddress.ip_network(f"{server_ip}/{prefix}", strict=False)
         self.client_ip = client_ip
@@ -177,6 +178,9 @@ class DhcpServer:
         self._stop.set()
 
     # ----- protocol -----
+
+    def leased_addresses(self) -> list[str]:
+        return list(self._leases.values())
 
     def lease_for(self, mac: str) -> str:
         ip = self._leases.get(mac)
@@ -252,8 +256,11 @@ class DhcpServer:
             self.session.event("dhcp_tx", mac=req.mac, xid=f"{req.xid:08x}",
                                msg_type=MSG_NAMES[mtype], yiaddr=yiaddr, dest=dest)
             if mtype == ACK and yiaddr != "0.0.0.0":
-                self.session.reach(STAGE_DHCP, client=yiaddr, mac=req.mac)
-                self.session.note("car address", f"{yiaddr} ({req.mac})")
+                if self.is_car:
+                    self.session.reach(STAGE_DHCP, client=yiaddr, mac=req.mac)
+                    self.session.note("car address", f"{yiaddr} ({req.mac})")
+                else:
+                    self.session.note("phone address", f"{yiaddr} ({req.mac})")
 
     def _destination(self, req: DhcpPacket, mtype: int, yiaddr: str) -> str:
         if req.ciaddr != "0.0.0.0":

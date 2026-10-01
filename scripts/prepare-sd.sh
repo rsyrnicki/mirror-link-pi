@@ -6,6 +6,10 @@
 # Usage:
 #   sudo ./scripts/prepare-sd.sh /dev/sdX                 # the whole SD card device
 #   sudo ./scripts/prepare-sd.sh --boot DIR --root DIR    # partitions already mounted
+#   add --phone to also set up phone mode (docs/phone-mode.md): Wi-Fi hotspot,
+#   adb + FFmpeg's libavcodec/libswscale installed into the image (needs
+#   qemu-user-static on this laptop),
+#   the pinned scrcpy server, and the adb key paired with `mlpi pair-phone`.
 #
 # What it does (idempotent, safe to re-run to update the code on the card):
 #   rootfs  /opt/mlpi                        code (src, config, systemd, scripts)
@@ -23,7 +27,10 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 DEV=""
 BOOT=""
 ROOT=""
+PHONE=0
 MOUNTED=()
+BINDS=()            # chroot bind mounts: unmounted only, never rmdir'd
+RESOLV_SAVED=0
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 say() { echo "==> $*"; }
@@ -37,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --boot) BOOT="$2"; shift 2 ;;
         --root) ROOT="$2"; shift 2 ;;
+        --phone) PHONE=1; shift ;;
         -h|--help) usage ;;
         /dev/*) DEV="$1"; shift ;;
         *) usage ;;
@@ -48,6 +56,7 @@ done
 
 cleanup() {
     local m
+    [[ -n "$ROOT" ]] && { cleanup_chroot 2>/dev/null || true; }
     for m in "${MOUNTED[@]:-}"; do
         [[ -n "$m" ]] || continue
         umount "$m" 2>/dev/null || true
@@ -181,9 +190,128 @@ if ! grep -qE '^[^:]+:[^:]*:1000:' "$ROOT/etc/passwd" && [[ ! -f "$BOOT/userconf
     echo "         be able to log in. Set user/password in Raspberry Pi Imager next time." >&2
 fi
 
+# ---------- phone mode (optional) ----------
+
+phone_packages() {
+    # adb + FFmpeg's decoder libraries from the image's own apt sources, installed by
+    # running apt inside the image with qemu. apt's package lists and download cache
+    # live in a temp dir on this laptop: a freshly written card has only ~300 MB free
+    # until its first boot, and the packages themselves need ~100 MB.
+    # (python3-av would need ~410 MB and does not fit — see src/mlpi/avdecode.py.)
+    local machine arch aptdir codec sws O
+    if [[ -x "$ROOT/usr/bin/adb" ]] && compgen -G "$ROOT/usr/lib/*/libavcodec.so.*" >/dev/null \
+            && compgen -G "$ROOT/usr/lib/*/libswscale.so.*" >/dev/null \
+            && [[ -x "$ROOT/usr/sbin/iw" ]]; then
+        say "adb and libavcodec already in the image"
+        return
+    fi
+    machine="$(od -An -t u1 -j 18 -N 1 "$ROOT/usr/bin/dpkg" | tr -d ' ')"
+    case "$machine" in
+        183) arch=aarch64 ;;
+        40)  arch=arm ;;
+        *)   die "cannot tell the image's CPU architecture (ELF machine $machine)" ;;
+    esac
+    [[ -e /proc/sys/fs/binfmt_misc/qemu-$arch ]] || \
+        die "installing packages into the image needs qemu: sudo apt install qemu-user-static"
+    say "installing adb + libavcodec into the image (qemu $arch, takes a few minutes)"
+    local d
+    for d in dev dev/pts proc sys; do
+        mount --bind "/$d" "$ROOT/$d"
+        BINDS+=("$ROOT/$d")
+    done
+    aptdir="$(mktemp -d /tmp/mlpi-apt.XXXX)"
+    mkdir -p "$aptdir/lists/partial" "$aptdir/cache/archives/partial" "$ROOT/mlpi-apt"
+    mount --bind "$aptdir" "$ROOT/mlpi-apt"
+    BINDS+=("$ROOT/mlpi-apt")
+    if [[ -e "$ROOT/etc/resolv.conf" || -L "$ROOT/etc/resolv.conf" ]]; then
+        mv "$ROOT/etc/resolv.conf" "$ROOT/etc/resolv.conf.mlpi-saved"
+        RESOLV_SAVED=1
+    fi
+    cp -L /etc/resolv.conf "$ROOT/etc/resolv.conf"
+    printf '#!/bin/sh\nexit 101\n' > "$ROOT/usr/sbin/policy-rc.d"   # start no services
+    chmod 0755 "$ROOT/usr/sbin/policy-rc.d"
+    O=(-o Dir::State::Lists=/mlpi-apt/lists -o Dir::Cache=/mlpi-apt/cache -o APT::Sandbox::User=root)
+    chroot "$ROOT" apt-get "${O[@]}" update -qq
+    # The library package names carry the FFmpeg ABI version (e.g. libavcodec61).
+    codec="$(chroot "$ROOT" apt-cache "${O[@]}" pkgnames libavcodec | grep -E '^libavcodec[0-9]+$' | sort -V | tail -1)"
+    sws="$(chroot "$ROOT" apt-cache "${O[@]}" pkgnames libswscale | grep -E '^libswscale[0-9]+$' | sort -V | tail -1)"
+    [[ -n "$codec" && -n "$sws" ]] || die "no libavcodec/libswscale package found in the image's apt sources"
+    chroot "$ROOT" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
+        apt-get "${O[@]}" install -y -qq --no-install-recommends adb "$codec" "$sws" iw
+    cleanup_chroot
+    rm -rf "$aptdir"
+    rmdir "$ROOT/mlpi-apt" 2>/dev/null || true
+}
+
+cleanup_chroot() {
+    local i
+    rm -f "$ROOT/usr/sbin/policy-rc.d"
+    if (( RESOLV_SAVED )); then
+        rm -f "$ROOT/etc/resolv.conf"
+        mv "$ROOT/etc/resolv.conf.mlpi-saved" "$ROOT/etc/resolv.conf"
+        RESOLV_SAVED=0
+    fi
+    for (( i=${#BINDS[@]}-1; i>=0; i-- )); do
+        umount "${BINDS[i]}" || umount -l "${BINDS[i]}"
+    done
+    BINDS=()
+}
+
+phone_setup() {
+    local user_home keydir password
+    say "phone mode"
+    # 1. scrcpy server (version + checksum pinned in the fetch script)
+    if [[ -n "${MLPI_SCRCPY_SERVER:-}" ]]; then
+        install -D -m 0644 "$MLPI_SCRCPY_SERVER" "$ROOT/opt/mlpi/vendor/scrcpy-server"
+    else
+        "$REPO/scripts/fetch-scrcpy-server.sh" "$ROOT/opt/mlpi/vendor/scrcpy-server"
+    fi
+    # 2. packages the Pi cannot download itself
+    if [[ -z "${MLPI_PHONE_SKIP_PACKAGES:-}" ]]; then
+        phone_packages
+    fi
+    # 3. the adb key the phone trusts (mlpi pair-phone), never generated on the Pi
+    user_home="$(getent passwd "${SUDO_USER:-root}" | cut -d: -f6)"
+    keydir="${MLPI_ADB_KEYDIR:-$user_home/.config/mlpi/adb/.android}"
+    if [[ ! -f "$keydir/adbkey" ]] && command -v adb >/dev/null; then
+        install -d -m 0700 "$keydir"
+        adb keygen "$keydir/adbkey" >/dev/null 2>&1 || true
+        [[ -n "${SUDO_USER:-}" ]] && chown -R "$SUDO_USER:" "$(dirname "$keydir")" || true
+    fi
+    if [[ -f "$keydir/adbkey" ]]; then
+        install -d -m 0700 "$ROOT/var/lib/mlpi/adb/.android"
+        install -m 0600 "$keydir/adbkey" "$ROOT/var/lib/mlpi/adb/.android/adbkey"
+        [[ -f "$keydir/adbkey.pub" ]] && \
+            install -m 0644 "$keydir/adbkey.pub" "$ROOT/var/lib/mlpi/adb/.android/adbkey.pub"
+        say "adb key copied from $keydir"
+    else
+        echo "WARNING: no adb key found at $keydir. Install adb on this laptop" >&2
+        echo "         (sudo apt install adb), run 'mlpi pair-phone', then re-run with --phone." >&2
+    fi
+    # 4. settings on the boot partition: enable phone mode with a random Wi-Fi password
+    if ! grep -q '^\[phone\]' "$BOOT/mlpi.toml"; then
+        password="$(python3 -c 'import secrets; print(secrets.token_urlsafe(9))')"
+        printf '\n[phone]\nenabled = true\nwifi_ssid = "MirrorLink-Pi"\nwifi_password = "%s"\nwifi_country = "DE"\n' \
+            "$password" >> "$BOOT/mlpi.toml"
+    fi
+    PHONE_SSID="$(sed -n '/^\[phone\]/,/^\[/s/^wifi_ssid *= *"\(.*\)"/\1/p' "$BOOT/mlpi.toml" | head -1)"
+    PHONE_PSK="$(sed -n '/^\[phone\]/,/^\[/s/^wifi_password *= *"\(.*\)"/\1/p' "$BOOT/mlpi.toml" | head -1)"
+}
+
+PHONE_SSID=""
+PHONE_PSK=""
+if (( PHONE )); then
+    phone_setup
+fi
+
 sync
 say "done. Put the card in the Pi. First boot takes ~1-2 min (the image resizes itself)."
 echo
 echo "Pre-flight at home (recommended, see docs/field-test.md): plug the Pi's USB (not PWR)"
 echo "port into this laptop, wait until the LED blinks 2× (laptop got an address), then:"
 echo "    PYTHONPATH=src python3 -m mlpi simulate-car --target 192.168.7.2"
+if (( PHONE )); then
+    echo
+    echo "Phone mode: join the phone to Wi-Fi '${PHONE_SSID:-MirrorLink-Pi}' (password: ${PHONE_PSK:-see mlpi.toml})"
+    echo "and switch on Wireless debugging. Details: docs/phone-mode.md"
+fi

@@ -115,6 +115,55 @@ class WatchdogConfig:
     max_reconnects: int = 20
 
 
+def _default_apps() -> list[dict]:
+    from .launcher import DEFAULT_APPS
+    return [{"name": a.name, "package": a.package, "colour": a.colour} for a in DEFAULT_APPS]
+
+
+@dataclass
+class PhoneConfig:
+    """Phone mode: mirror an Android phone over Wi-Fi with scrcpy (docs/phone-mode.md)."""
+    enabled: bool = False
+    # The Pi's own Wi-Fi hotspot the phone joins. No internet is offered on it, so the
+    # phone keeps using mobile data for Maps/Spotify.
+    interface: str = "wlan0"
+    address: str = "192.168.8.1/24"
+    client_address: str = "192.168.8.44"
+    manage_hotspot: bool = True
+    wifi_ssid: str = "MirrorLink-Pi"
+    wifi_password: str = ""              # 8-63 characters; prepare-sd.sh --phone sets one
+    wifi_country: str = "DE"
+    wifi_channel: int = 6
+    # adb: its key (paired once with `mlpi pair-phone` on the laptop) lives in adb_home.
+    adb: str = "adb"
+    adb_home: str = "/var/lib/mlpi/adb"
+    legacy_port: int = 5555              # also try `adb tcpip` mode; 0 = don't
+    server_jar: str = "/opt/mlpi/vendor/scrcpy-server"
+    # Video: a new virtual display on the phone, exactly the car's screen size.
+    # 120 dpi makes 800x480 px count as a 1067x640 dp "tablet": apps then offer their
+    # landscape layouts (at 200 dpi, portrait-only apps like Audible showed pillarboxed).
+    dpi: int = 120
+    max_fps: int = 20
+    bit_rate: int = 3_000_000
+    # The Pi draws its own launcher (tiles for `apps`, a Home button over the video).
+    # With start_app set, that app opens directly instead.
+    launcher: bool = True
+    # Home-page tiles (up to 7; an "All apps" tile is added). Override in mlpi.toml:
+    #   apps = [{name = "Maps", package = "com.google.android.apps.maps", colour = "#1a73e8"}]
+    apps: list = field(default_factory=lambda: _default_apps())
+    start_app: str = ""
+    system_decorations: bool = False     # the phone's own launcher + nav bar on the display
+    keep_active: bool = True             # keep the phone awake while mirroring
+    screen_off: bool = True              # phone's own screen off (not locked) meanwhile
+    decoder: str = ""                    # "" = software h264; "h264_v4l2m2m" = Pi hardware
+    decoder_threads: int = 1
+    max_lag: float = 2.0                 # seconds behind the phone before skipping ahead
+    home_button: str = "right"           # right | left | top-left | top-right |
+                                         # bottom-left | bottom-right | off
+    avoid_bad_wifi: bool = True          # set Android's "avoid bad Wi-Fi" so mobile data
+                                         # stays the phone's internet
+
+
 @dataclass
 class SessionConfig:
     # Every boot gets its own directory under <root>/sessions/.
@@ -143,6 +192,7 @@ class Config:
     device: DeviceConfig = field(default_factory=DeviceConfig)
     experiment: ExperimentConfig = field(default_factory=ExperimentConfig)
     watchdog: WatchdogConfig = field(default_factory=WatchdogConfig)
+    phone: PhoneConfig = field(default_factory=PhoneConfig)
     session: SessionConfig = field(default_factory=SessionConfig)
     led: LedConfig = field(default_factory=LedConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)

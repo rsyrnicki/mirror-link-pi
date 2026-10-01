@@ -166,3 +166,6 @@ cython_debug/
 
 # MirrorLink spec PDFs (scripts/fetch-spec.sh) — ETSI copyright, not redistributed
 spec/
+
+# Downloaded at install time (scripts/fetch-scrcpy-server.sh), not redistributed
+vendor/

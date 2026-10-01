@@ -115,3 +115,32 @@ dap = true
 name = "spec-1.1"
 description = "MirrorLink 1.1 without a DAP endpoint (1.1/1.2 clients may skip DAP, Part 4 note)."
 ml_version = "1.1"
+
+# Drive-mode experiments (car session 2026-09-30): with the toolbox's "allow all
+# MirrorLink apps while driving" active, the MIB2 still blocks our app in drive mode with
+# reason bit 5 "Not allowed application ID". These claim the trust level that the spec
+# reserves for apps backed by a CCC certificate (0x00A0, Part 9 Table A-1), and/or the
+# navigation category, in case the head unit (or the patch) decides on those values.
+# Not in the rotation by default: test one per trip with
+#   [experiment] mode = "fixed" / fixed_variant = "<name>"   (mlpi.toml, boot partition)
+
+[[variant]]
+name = "drive-cert-trust"
+description = "s6-audio-home, but claiming trust level 0x00A0 (application certificate)."
+home_app = true
+rtp_apps = true
+allowed_profile_ids = true
+applist_namespace = false
+app_trust_level = "0x00A0"
+context_trust_level = "0x00A0"
+
+[[variant]]
+name = "drive-cert-nav"
+description = "drive-cert-trust plus the navigation application category (0x00050000)."
+home_app = true
+rtp_apps = true
+allowed_profile_ids = true
+applist_namespace = false
+app_trust_level = "0x00A0"
+context_trust_level = "0x00A0"
+context_app_category = "0x00050000"

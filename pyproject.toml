@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mlpi"
-version = "0.1.0"
+version = "1.0.0"
 description = "MirrorLink-Pi: pretend a Raspberry Pi Zero is a MirrorLink phone for the car head unit"
 readme = "README.md"
 requires-python = ">=3.11"

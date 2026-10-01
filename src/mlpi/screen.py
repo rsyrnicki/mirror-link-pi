@@ -19,8 +19,10 @@ from .session import STAGE_NAMES, Session
 
 class StatusScreen:
     def __init__(self, canvas: cv.Canvas, *, session: Session | None = None,
-                 variant_name: Callable[[], str] = lambda: "-") -> None:
+                 variant_name: Callable[[], str] = lambda: "-",
+                 phone_status: Callable[[], str] | None = None) -> None:
         self.canvas = canvas
+        self.phone_status = phone_status
         self.session = session
         self.variant_name = variant_name
         self._t0 = time.monotonic()
@@ -91,7 +93,7 @@ class StatusScreen:
         boot = self.session.boot_number if self.session else 0
         stage = self.session.stage if self.session else 0
         with self._lock:
-            return [
+            lines = [
                 f"BOOT #{boot}   UP {up // 3600:02d}:{up // 60 % 60:02d}:{up % 60:02d}",
                 f"STAGE {stage}: {STAGE_NAMES.get(stage, '?')}",
                 f"VARIANT: {self.variant_name()}",
@@ -100,6 +102,10 @@ class StatusScreen:
                 f"TOUCH: {self.last_touch}",
                 f"KEY: {self.last_key}",
             ]
+        if self.phone_status is not None:
+            lines[5:] = [f"TOUCH: {lines[5][7:]}  KEY: {lines[6][5:]}",
+                         f"PHONE: {self.phone_status()}"]
+        return lines
 
     def refresh(self) -> None:
         c = self.canvas

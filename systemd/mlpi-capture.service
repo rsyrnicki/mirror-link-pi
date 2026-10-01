@@ -11,7 +11,8 @@ WorkingDirectory=/opt/mlpi
 ExecStart=/usr/bin/python3 -m mlpi capture
 Restart=always
 RestartSec=2
-Nice=5
+Nice=10
+IOSchedulingClass=idle
 
 [Install]
 WantedBy=mlpi.target

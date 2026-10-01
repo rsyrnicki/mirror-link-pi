@@ -80,3 +80,37 @@ def test_gadget_files_installed(tmp_path):
     assert (root / "opt/mlpi/src/mlpi/gadget.py").is_file()
     assert (root / "etc/systemd/system/multi-user.target.wants/mlpi.target").is_symlink()
     assert (boot / "mlpi.toml").is_file()
+
+
+def _run_phone(boot: Path, root: Path, keydir: Path, jar: Path) -> subprocess.CompletedProcess:
+    env = dict(os.environ, MLPI_PHONE_SKIP_PACKAGES="1", MLPI_SCRCPY_SERVER=str(jar),
+               MLPI_ADB_KEYDIR=str(keydir))
+    return subprocess.run(["bash", str(SCRIPT), "--phone", "--boot", str(boot), "--root",
+                           str(root)], capture_output=True, text=True, timeout=120, env=env)
+
+
+@pytest.mark.skipif(not SCRIPT.exists(), reason="prepare-sd.sh missing")
+def test_phone_mode_installs_server_key_and_enables_hotspot_once(tmp_path):
+    boot, root = _fake_card(tmp_path, STOCK_CONFIG)
+    keydir = tmp_path / "keys"
+    keydir.mkdir()
+    (keydir / "adbkey").write_text("-----BEGIN PRIVATE KEY-----\n")
+    (keydir / "adbkey.pub").write_text("QAAAA... mlpi\n")
+    jar = tmp_path / "scrcpy-server"
+    jar.write_bytes(b"PK\x03\x04jar")
+    out = _run_phone(boot, root, keydir, jar)
+    assert out.returncode == 0, out.stderr
+    assert (root / "opt/mlpi/vendor/scrcpy-server").read_bytes() == b"PK\x03\x04jar"
+    key = root / "var/lib/mlpi/adb/.android/adbkey"
+    assert key.read_text().startswith("-----BEGIN") and oct(key.stat().st_mode)[-3:] == "600"
+    import tomllib
+    toml = (boot / "mlpi.toml").read_text()
+    assert "[phone]\nenabled = true" in toml
+    password = tomllib.loads(toml)["phone"]["wifi_password"]
+    assert len(password) >= 8 and password in out.stdout
+    # Re-running keeps the password (the phone remembers it) and doesn't duplicate.
+    _run_phone(boot, root, keydir, jar)
+    toml2 = (boot / "mlpi.toml").read_text()
+    assert toml2.count("\n[phone]\n") == 1 and password in toml2
+    # The generated file is valid TOML that enables phone mode.
+    assert tomllib.loads(toml2)["phone"]["enabled"] is True

@@ -13,8 +13,14 @@ On the laptop:
   simulate-car   play the recorded VW head-unit handshake against a server, then
                  connect to its VNC server and save a screenshot
   report         summarise a session directory brought back from the car
+  car-view       live window that talks to the Pi exactly like the car (RGB565,
+                 one update request outstanding); clicks become touches
   screenshot     render the status screen to a PNG without any network
   discover       send M-SEARCH and dump replies (debugging)
+  pair-phone     pair an Android phone for phone mode (Wireless debugging), with the
+                 adb key that prepare-sd.sh --phone puts on the SD card
+  phone-preview  mirror the phone into a local VNC server, to try phone mode at the
+                 desk with any VNC viewer (docs/phone-mode.md)
 """
 
 from __future__ import annotations
@@ -48,6 +54,14 @@ def main(argv: list[str] | None = None) -> int:
     p_sim.add_argument("--attempts", type=int, default=1,
                        help="repeat the handshake N times (exercises variant rotation)")
 
+    p_view = sub.add_parser("car-view",
+                            help="live window that talks to the Pi exactly like the car")
+    p_view.add_argument("--target", default="192.168.7.2", help="the Pi (default 192.168.7.2)")
+    p_view.add_argument("--port", type=int, default=5900)
+    p_view.add_argument("--seconds", type=float, default=0, help="close after N seconds")
+    p_view.add_argument("--no-window", action="store_true",
+                        help="no window: just receive and print the frame rate")
+
     p_probe = sub.add_parser("probe-phone",
                              help="probe a real MirrorLink phone as a reference (Linux, root)")
     p_probe.add_argument("--list", action="store_true", help="list attached USB devices and exit")
@@ -69,6 +83,22 @@ def main(argv: list[str] | None = None) -> int:
     p_disc.add_argument("--interface", "-i", help="bind to this interface (overrides config)")
     p_disc.add_argument("--timeout", "-t", type=float, default=4.0)
     p_disc.add_argument("--verbose", "-v", action="store_true")
+
+    p_pair = sub.add_parser("pair-phone", help="pair the phone for phone mode (laptop)")
+    p_pair.add_argument("target", nargs="?", default="", help="IP:PORT from the pairing dialog")
+    p_pair.add_argument("code", nargs="?", default="", help="pairing code")
+
+    p_prev = sub.add_parser("phone-preview", help="mirror the phone into a local VNC server")
+    p_prev.add_argument("--serial", default="", help="adb serial (default: first device)")
+    p_prev.add_argument("--port", type=int, default=5900)
+    p_prev.add_argument("--screenshot", default="", help="save the first frame as PNG")
+    p_prev.add_argument("--server-jar", default="", help="default: vendor/scrcpy-server")
+    p_prev.add_argument("--start-app", default=None, help="package to start ('' = launcher)")
+    p_prev.add_argument("--dpi", type=int, default=0)
+    p_prev.add_argument("--max-fps", type=int, default=0)
+    p_prev.add_argument("--bit-rate", type=int, default=0, help="e.g. 8000000")
+    p_prev.add_argument("--screen-on", action="store_true",
+                        help="keep the phone's own screen on while mirroring")
 
     args = parser.parse_args(argv)
     cfg = config_mod.load(path=args.config)
@@ -95,7 +125,8 @@ def main(argv: list[str] | None = None) -> int:
         from . import capture, session
         directory = session.current_session_dir() or Path(cfg.session.root)
         directory.mkdir(parents=True, exist_ok=True)
-        capture.capture(cfg.network.interface, directory / f"{cfg.network.interface}.pcap")
+        capture.capture(cfg.network.interface, directory / f"{cfg.network.interface}.pcap",
+                        vnc_port=cfg.network.vnc_port)
         return 0
 
     if args.cmd == "simulate-car":
@@ -103,6 +134,11 @@ def main(argv: list[str] | None = None) -> int:
         return simulate_car.run(
             target=args.target, http_port=args.http_port, callback_ip=args.callback_ip,
             vnc=not args.no_vnc, screenshot=Path(args.screenshot), attempts=args.attempts)
+
+    if args.cmd == "car-view":
+        from .tools import car_view
+        return car_view.run(target=args.target, port=args.port, seconds=args.seconds,
+                            window=not args.no_window)
 
     if args.cmd == "probe-phone":
         from .tools import probe_phone
@@ -135,6 +171,20 @@ def main(argv: list[str] | None = None) -> int:
         if args.interface:
             cfg.network.interface = args.interface
         return discover.run(cfg, timeout=args.timeout, verbose=args.verbose)
+
+    if args.cmd == "pair-phone":
+        from .tools import phone_tools
+        return phone_tools.pair_phone(args.target, args.code)
+
+    if args.cmd == "phone-preview":
+        from .tools import phone_tools
+        return phone_tools.phone_preview(
+            serial=args.serial, port=args.port,
+            screenshot=Path(args.screenshot) if args.screenshot else None,
+            server_jar=args.server_jar, start_app=args.start_app, dpi=args.dpi or None,
+            max_fps=args.max_fps or None, bit_rate=args.bit_rate or None,
+            screen_off=not args.screen_on,
+            width=cfg.vnc.width, height=cfg.vnc.height)
 
     parser.error(f"unknown command: {args.cmd}")
     return 2
