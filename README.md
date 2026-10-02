@@ -1,16 +1,45 @@
 # MirrorLink-Pi
 
-Make a Raspberry Pi Zero 2 W appear as a MirrorLink phone to a car head unit, so the
-car displays a screen rendered by the Pi (over VNC, over USB) — and, in **phone mode**,
-your Android phone's apps (Google Maps, Spotify, …) on the car's screen, with touch.
+Your Android phone's apps on a MirrorLink car screen. A Raspberry Pi Zero 2 W plugged
+into the car's USB socket presents itself as a MirrorLink phone; the head unit shows
+Google Maps, Spotify or any other app from your phone, and you control them by touch.
 
-**Version 1.0** (2026-10-01): tested end to end with a VW Polo's MIB2 Standard head unit
-(`VW-Mibstd2`) and a Samsung Galaxy A56 (Android 16). See [`CHANGELOG.md`](CHANGELOG.md).
+**Status: works in daily use** with a VW Polo's MIB2 Standard head unit (`VW-Mibstd2`)
+and a Samsung Galaxy A56 (Android 16). Other MirrorLink head units and Android phones
+are untested so far; see [`docs/compatibility.md`](docs/compatibility.md) and please
+add yours.
 
-## First success — 2026-09-29
+## What it does
 
-A VW Polo's MIB2 Standard head unit (`VW-Mibstd2`) lists the Pi as a MirrorLink app,
-launches it and shows the Pi's screen, with touch input coming back to the Pi.
+- **Phone apps on the car screen:** about 20 frames per second at 800×480, touch input,
+  a delay of roughly a quarter of a second. Apps run on a separate car-sized display
+  inside the phone, so the phone's own screen can stay off.
+- **Launcher with big tiles** for your favourite apps, plus all installed apps.
+- **Status bar from the phone:** clock, battery (with charging), mobile signal and
+  network type, media buttons (previous, play/pause, next), Do Not Disturb, and a switch
+  for the phone's own screen.
+- **Back and Home buttons** on top of the phone picture (the MIB2 sends no hardware
+  keys to MirrorLink).
+- **Internet stays on the phone's mobile data;** the Pi checks that and warns on the car
+  screen if the phone routes its traffic to the Pi's Wi-Fi instead. **Audio** stays on
+  the phone's normal Bluetooth connection to the car.
+- **Pairing on the car screen:** if the phone doesn't know the Pi, type Android's pairing
+  code on a number pad in the car.
+- **One-command SD card setup** (`install-sd.sh`), **updates and log collection over the
+  USB cable** without taking the card out, and protection against power cuts when the
+  ignition goes off.
+- No app on the phone: it uses Android's built-in Wireless debugging and
+  [scrcpy](https://github.com/Genymobile/scrcpy).
+
+**Limits:** the head unit blocks the picture while the car is moving, because the Pi
+isn't CCC-certified (see below); use it parked. Android only: iPhones have no
+equivalent of Wireless debugging. Not yet tried in the car: typing with the car's
+on-screen keyboard and the experimental Bluetooth audio auto-connect.
+
+## How it got here
+
+The first connection, 2026-09-29: the car lists the Pi as a MirrorLink app, launches it
+and shows the Pi's screen, with touch input coming back to the Pi.
 
 | The car lists the Pi as a MirrorLink app | The Pi's screen on the car's display |
 |---|---|
@@ -22,14 +51,13 @@ What made it work: the winning protocol variant is **`s6-audio-home`**. Its app 
 shaped like a real Galaxy S6's (probed with `mlpi probe-phone`, see
 [`docs/probe-phone.md`](docs/probe-phone.md)): a VNC home-screen app plus RTP audio
 server/client entries for the payload types 98/99 the car announces. With a bare VNC
-entry the car stopped right after `GetApplicationList`. Every car trip is an automated
+entry the car stopped right after `GetApplicationList`. Every car trip was an automated
 experiment: the Pi records everything and rotates through protocol variants until the
 car connects, then locks the winner (see [`docs/field-test.md`](docs/field-test.md)).
 The implementation follows the public MirrorLink spec, ETSI TS 103 544 (see
-[`docs/spec-notes.md`](docs/spec-notes.md)).
-
-Known limit: while the car is moving, the head unit blocks the picture because the Pi
-cannot pass the CCC certification check (device attestation needs a CCC-issued key).
+[`docs/spec-notes.md`](docs/spec-notes.md)). Phone mode followed on 2026-10-01
+(version 1.0); the status bar, pairing in the car and the rest since then
+([`CHANGELOG.md`](CHANGELOG.md)).
 
 ## Legal and safety notice
 
@@ -109,12 +137,13 @@ debugging).
 #    Fedora: sudo dnf install android-tools qemu-user-static python3-tkinter openssl):
 sudo apt install adb qemu-user-static python3-tk openssl
 git clone https://github.com/rsyrnicki/mirror-link-pi && cd mirror-link-pi
-# 1. Pair the phone with the Pi's key (phone + laptop on the same home Wi-Fi):
-PYTHONPATH=src python3 -m mlpi pair-phone
-# 2. Make the SD card: downloads Raspberry Pi OS Lite, writes it, sets everything up
+# 1. Make the SD card: downloads Raspberry Pi OS Lite, writes it, sets everything up
 #    (phone mode, updates over USB, power-cut protection; login mlpi / mlpi):
 lsblk                                         # find the card, e.g. /dev/sdb
 sudo ./scripts/install-sd.sh /dev/sdX
+# 2. Phone: Developer options → Wireless debugging on; join the Wi-Fi "MirrorLink-Pi"
+#    (password printed by step 1). When it warns "no internet", don't answer: go to
+#    the home screen. The first time, the car asks for Android's pairing code.
 # 3. Pre-flight at home: card in the Pi, Pi's USB port → laptop, wait for 2 LED blinks:
 PYTHONPATH=src python3 -m mlpi simulate-car --target 192.168.7.2
 PYTHONPATH=src python3 -m mlpi car-view       # live window, like the car's screen
