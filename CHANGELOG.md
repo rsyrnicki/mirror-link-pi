@@ -20,6 +20,10 @@
   on their own partition and keeps the system journal in RAM.
 - The phone is found with its screen off (Android ignores mDNS then): remembered adb
   port, and a port scan when mDNS stays silent.
+- Status bar: signal bars on 5G too (its signal line is written `level = N`).
+- A phone that re-joined the Wi-Fi with a new random MAC is looked for only at its new
+  address; adb connections stuck "offline" are dropped (and adb restarted if it keeps
+  happening).
 - Compatibility list (`docs/compatibility.md`) and a GitHub issue template for reports.
 - The car's keyboard types into the phone (and fills in the pairing code).
 - A Back button above the Home button on the phone video (`back_button`): the MIB2

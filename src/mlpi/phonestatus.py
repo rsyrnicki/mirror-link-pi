@@ -62,8 +62,9 @@ def parse_battery(text: str) -> tuple[int | None, bool]:
 
 
 def parse_signal(text: str) -> int | None:
-    """Best ``level=N`` (0..4) in the mSignalStrength lines of telephony.registry."""
-    levels = [int(n) for n in re.findall(r"\blevel=(\d)", text)]
+    """Best ``level=N`` (0..4) in the mSignalStrength lines of telephony.registry.
+    LTE writes ``level=3``, 5G (CellSignalStrengthNr) ``level = 3``."""
+    levels = [int(n) for n in re.findall(r"\blevel\s*=\s*(\d)", text)]
     return max(levels) if levels else None
 
 

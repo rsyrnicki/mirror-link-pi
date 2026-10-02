@@ -322,3 +322,38 @@ def test_wifi_as_default_network_is_detected():
     assert not ph.wifi_is_default_network(
         CONNECTIVITY_WIFI_DEFAULT.replace("network: 175", "network: 172"))
     assert not ph.wifi_is_default_network("")
+
+
+def test_stuck_offline_connection_is_dropped_and_adb_restarted():
+    calls = []
+
+    class FakeAdb:
+        def connect(self, target):
+            return True
+
+        def state(self, target):
+            return "offline"
+
+        def run(self, *args, serial="", timeout=20.0):
+            calls.append(args)
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    link = ph.PhoneLink(types.SimpleNamespace(adb="adb", adb_home=""),
+                        types.SimpleNamespace(width=800, height=480), switch=None,
+                        adb=FakeAdb())
+    for _ in range(ph.OFFLINE_RESTART_AFTER):
+        assert link._try_targets(["192.168.8.45:40445"]) == ""
+    assert calls.count(("disconnect", "192.168.8.45:40445")) == ph.OFFLINE_RESTART_AFTER
+    assert calls.count(("kill-server",)) == 1
+
+
+def test_only_addresses_of_connected_phones_are_tried():
+    from mlpi.dhcp import DhcpServer
+    d = DhcpServer(interface="wlan0", server_ip="192.168.8.1", prefix=24,
+                   client_ip="192.168.8.44", offer_router=False, offer_dns=False,
+                   session=None, is_car=False)
+    assert d.lease_for("aa:aa:aa:aa:aa:aa") == "192.168.8.44"      # before "Forget"
+    assert d.lease_for("bb:bb:bb:bb:bb:bb") == "192.168.8.45"      # new random MAC
+    assert d.connected_addresses(["BB:BB:BB:BB:BB:BB"]) == ["192.168.8.45"]
+    assert d.connected_addresses([]) == []
+    assert d.connected_addresses(None) == ["192.168.8.45", "192.168.8.44"]

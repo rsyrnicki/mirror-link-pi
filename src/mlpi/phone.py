@@ -77,6 +77,7 @@ KNOB_CW, KNOB_CCW = 0x3000000E, 0x3000000F          # rotate z clockwise / anti-
 KNOB_DPAD = {KNOB_UP: 19, KNOB_DOWN: 20, KNOB_LEFT: 21, KNOB_RIGHT: 22}   # KEYCODE_DPAD_*
 STATUS_POLL_SECONDS = 30
 CONNECTIVITY_RECHECK_SECONDS = 120
+OFFLINE_RESTART_AFTER = 6       # adb connects stuck "offline" before restarting adb
 NOT_FOUND_HINT = "NOT FOUND: IS WIRELESS DEBUGGING ON?"
 REFUSED_HINT = "THE PHONE DOESN'T KNOW THIS PI: PAIR IT"
 
@@ -653,6 +654,7 @@ class PhoneLink:
         self.device_name = ""
         self._serial = ""
         self._last_scan = float("-inf")
+        self._offline_count = 0                   # connects that ended "offline"
 
     # ----- helpers -----
 
@@ -1159,6 +1161,15 @@ class PhoneLink:
                 return target
             if state == "unauthorized":
                 self._set_status("phone refused adb: pair it (docs/phone-mode.md)")
+            # Otherwise adb keeps the entry, answers "already connected" next time and
+            # the state stays "offline" for good.
+            self.adb.run("disconnect", target, timeout=8)
+            if state == "offline":
+                self._offline_count += 1
+                if self._offline_count % OFFLINE_RESTART_AFTER == 0:
+                    out = self.adb.run("kill-server", timeout=15)
+                    self._event("phone_adb_restart", offline=self._offline_count,
+                                rc=out.returncode)
         return ""
 
     def _port_file(self) -> Path | None:

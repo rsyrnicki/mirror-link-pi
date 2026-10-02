@@ -43,3 +43,11 @@ def test_status_bar_redraws_on_change_only():
     assert launcher.frame.version == v + 1
     launcher.set_state(battery=50)                 # unchanged: no redraw
     assert launcher.frame.version == v + 1
+
+
+def test_signal_level_on_5g():
+    nr = ("mSignalStrength=SignalStrength:{mLte=CellSignalStrengthLte: rssi=2147483647 "
+          "level=0 parametersUseForLevel=0,mNr=CellSignalStrengthNr:{ csiRsrp = -44 "
+          "ssRsrp = -98 ssRsrq = -11 ssSinr = 12 level = 3 parametersUseForLevel = 0 }}")
+    from mlpi.phonestatus import parse_signal
+    assert parse_signal(nr) == 3
