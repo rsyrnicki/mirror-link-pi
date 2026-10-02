@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.1.0 — 2026-10-02
+
+Everyday use in the car: a launcher status bar, pairing on the car screen, Back and
+Home buttons, and setup, updates and logs without taking the SD card out. Tested on
+the same VW Polo (MIB2 Standard) and Samsung Galaxy A56.
+
+### Phone mode
+- Launcher status bar: the phone's clock, signal bars + network type (5G too), battery
+  (with charging bolt), media keys (previous, play/pause, next), Do Not Disturb toggle
+  and a toggle for the phone's own screen. Polled from the phone every 30 s with one adb
+  call.
+- Back and Home buttons on the phone video (`back_button`, `home_button`): the MIB2
+  Standard sends no knob or hardware keys to MirrorLink at all.
+- Pairing from the car screen: open "Pair device with pairing code" on the phone, type
+  the code on the car's number pad (port found by mDNS, or typed). Shown automatically
+  when the phone is on the Pi's Wi-Fi but doesn't accept the Pi, with a message saying
+  which of the two it is (not found / not paired).
+- Warning line on the launcher when the phone uses the Pi's Wi-Fi (no internet) as its
+  default network, with the fix in `docs/phone-mode.md` (Samsung's "Internet may not be
+  available" prompt). Checked every 2 minutes; "avoid bad Wi-Fi" is re-applied then too.
+- The car's on-screen keyboard types into the phone (and fills in the pairing code).
+  Not yet tried in the car.
+- The car's rotary knob: a highlight on the launcher, scroll wheel in apps, for head
+  units that send knob events (the MIB2 Standard doesn't).
+- The phone is found with its screen off (Android ignores mDNS then): remembered adb
+  port, and a port scan when mDNS stays silent. Only phones currently on the Wi-Fi are
+  looked for; adb connections stuck "offline" are dropped.
+- Experimental, not yet tried: Bluetooth audio auto-connect (variant
+  `s6-audio-home-bt`, `[experiment] start_variant` for a trial with automatic fallback).
+
+### Setup and maintenance
+- `scripts/install-sd.sh /dev/sdX`: one command downloads Raspberry Pi OS Lite
+  (checksum-verified), writes it and sets up everything. The login (`mlpi`/`mlpi`,
+  hostname `mlpi`) is created offline, so first boot never waits at the user wizard.
+- Over the USB cable, card stays in the Pi: updates (`scripts/update-pi.sh`) and logs
+  (`scripts/collect-logs.sh --pi`).
+- Power-cut protection: recordings and state on their own partition, system journal in
+  RAM.
+- Compatibility list (`docs/compatibility.md`), a GitHub issue template for reports, and
+  `docs/how-it-works.md`.
+
+### Fixed
+- Media keys reached no app (they went to the virtual display); now sent to the app
+  that is playing.
+- The status bar could stop updating (a poll part without output discarded the whole
+  result).
+- The pairing page vanished mid-typing when the phone connected anyway; it now says that
+  no pairing was needed.
+
 ## 1.0.0 — 2026-10-01
 
 First release that works end to end in a car: a VW Polo's MIB2 Standard head unit

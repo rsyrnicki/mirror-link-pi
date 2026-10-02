@@ -96,6 +96,9 @@ class ExperimentConfig:
     # "fixed":  always use `fixed_variant`.
     mode: str = "rotate"
     fixed_variant: str = "spec-1.0"
+    # rotate mode: begin with this variant instead of last boot's winner (to try a new
+    # one with automatic fallback to the next in the list). "" = the winner.
+    start_variant: str = ""
     # Empty = config/variants.toml shipped in the repo.
     variants_file: str = ""
     # A descriptor fetch starts a new attempt once the previous attempt got its app list,
@@ -134,6 +137,9 @@ class PhoneConfig:
     wifi_password: str = ""              # 8-63 characters; prepare-sd.sh --phone sets one
     wifi_country: str = "DE"
     wifi_channel: int = 6
+    # The phone's Bluetooth address for the s6-audio-home-bt variant ("" = read it from
+    # the phone over adb and remember it on the card).
+    bt_address: str = ""
     # adb: its key (paired once with `mlpi pair-phone` on the laptop) lives in adb_home.
     adb: str = "adb"
     adb_home: str = "/var/lib/mlpi/adb"
@@ -158,8 +164,10 @@ class PhoneConfig:
     decoder: str = ""                    # "" = software h264; "h264_v4l2m2m" = Pi hardware
     decoder_threads: int = 1
     max_lag: float = 2.0                 # seconds behind the phone before skipping ahead
+    knob_invert: bool = False            # True: clockwise = wheel up (zoom in)
     home_button: str = "right"           # right | left | top-left | top-right |
                                          # bottom-left | bottom-right | off
+    back_button: bool = True             # a Back button above Home (the car sends no Back key)
     avoid_bad_wifi: bool = True          # set Android's "avoid bad Wi-Fi" so mobile data
                                          # stays the phone's internet
 

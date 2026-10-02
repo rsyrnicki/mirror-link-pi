@@ -5,7 +5,8 @@ Phone launchers can't be used on scrcpy's virtual display: Android only puts a
 icons), and ordinary launchers look squashed at 800×480. So the Pi draws the home
 screen itself:
 
-  home page      large tiles for the favourite apps + an "All apps" tile
+  home page      status bar (phone clock, signal, battery, media keys, Do Not Disturb,
+                 phone screen) above large tiles for the favourite apps + "All apps"
   all-apps pages every launchable app on the phone (from scrcpy's app list), paged
   Home button    drawn over a corner of the phone's video; brings the tiles back
 
@@ -17,11 +18,13 @@ upper case only, so app names are transliterated (Ä → AE, é → E, …).
 from __future__ import annotations
 
 import re
+import threading
 import unicodedata
 import zlib
 from dataclasses import dataclass
 
 from . import canvas as cv
+from .phonestatus import PhoneState
 from .video import VideoFrame
 
 
@@ -190,23 +193,32 @@ def parse_app_list(text: str) -> list[App]:
 
 
 # ("app", App) | ("all", None) | ("home", None) | ("prev", None) | ("next", None)
+# | ("media", "previous" / "play_pause" / "next") | ("dnd", None) | ("screen", None)
 Target = tuple[str, object]
+
+FOCUS = "#ffd54f"           # knob highlight
+ACTIVE_DND = "#7b1fa2"
+ACTIVE_SCREEN = "#1565c0"
+OFF = "#3a414b"
+GREEN, AMBER, RED = "#43a047", "#f9a825", "#e53935"
 
 
 class Launcher:
     """Home page, all-apps pages, and the Home button overlaid on the phone's video."""
 
-    HOME_W, HOME_H = 44, 64  # px, the Home button overlaid on the phone's video
+    HOME_W, HOME_H = 44, 64  # px, each button overlaid on the phone's video
     HOME_MARGIN = 4
+    NAV_GAP = 6              # between the Back and the Home button
     HOME_POSITIONS = ("right", "left", "top-left", "top-right", "bottom-left",
                       "bottom-right", "off")
     TOP = 64                # header height
 
     def __init__(self, frame: VideoFrame, favourites: list[App], *,
-                 home_button: str = "right") -> None:
+                 home_button: str = "right", back_button: bool = True) -> None:
         if home_button not in self.HOME_POSITIONS:
             raise ValueError(f"home_button must be one of {self.HOME_POSITIONS}")
         self.home_position = home_button
+        self.back_button = back_button
         self.frame = frame
         self.favourites = favourites
         self.visible_favourites = list(favourites)   # narrowed once the app list is known
@@ -214,7 +226,12 @@ class Launcher:
         self.width, self.height = frame.width, frame.height
         self.page = -1                     # -1 = home page, 0.. = all-apps pages
         self.status = ""
+        self.notice = ""                   # warning line at the bottom of the home page
+        self.state = PhoneState()
         self.targets: list[tuple[tuple[int, int, int, int], Target]] = []
+        self._lock = threading.RLock()      # drawn from the input and the polling thread
+        self._clock_shown = ""
+        self.focus: int | None = None       # knob highlight (index into focus_order)
         self.draw()
 
     # ----- pages -----
@@ -240,14 +257,68 @@ class Launcher:
 
     def go(self, page: int) -> None:
         self.page = max(-1, min(page, self.pages - 1))
+        if self.focus is not None:
+            self.focus = 0                 # knob users: start on the first tile again
         self.draw()
+
+    # ----- knob -----
+
+    def focus_order(self) -> list[tuple[tuple[int, int, int, int], Target]]:
+        """Targets in knob order: the tiles in reading order, then the bar buttons."""
+        with self._lock:
+            targets = list(self.targets)
+        return sorted(targets, key=lambda t: (t[0][1] < self.TOP, t[0][1], t[0][0]))
+
+    def move_focus(self, step: int) -> None:
+        with self._lock:
+            n = len(self.targets)
+            if not n:
+                return
+            self.focus = 0 if self.focus is None else (self.focus + step) % n
+            self.draw()
+
+    def focused(self) -> Target | None:
+        order = self.focus_order()
+        if self.focus is None or not order:
+            return None
+        return order[min(self.focus, len(order) - 1)][1]
+
+    def clear_focus(self) -> None:
+        with self._lock:
+            if self.focus is not None:
+                self.focus = None
+                self.draw()
+
+    def set_state(self, **fields) -> None:
+        """Update the status bar (redrawn only if something visible changed)."""
+        with self._lock:
+            changed = False
+            for key, value in fields.items():
+                if getattr(self.state, key) != value:
+                    setattr(self.state, key, value)
+                    changed = True
+            if changed or self.state.clock() != self._clock_shown:
+                self.draw()
+
+    def set_notice(self, text: str) -> None:
+        with self._lock:
+            if text != self.notice:
+                self.notice = text
+                self.draw()
+
+    def tick(self) -> None:
+        """Called every few seconds: redraw when the clock's minute changes."""
+        with self._lock:
+            if self.page < 0 and self.state.clock() != self._clock_shown:
+                self.draw()
 
     # ----- drawing -----
 
-    def _grid(self, n: int, cols: int, rows: int, top: int) -> list[tuple[int, int, int, int]]:
+    def _grid(self, n: int, cols: int, rows: int, top: int,
+              bottom: int = 0) -> list[tuple[int, int, int, int]]:
         margin, gap = 16, 14
         tw = (self.width - 2 * margin - (cols - 1) * gap) // cols
-        th = (self.height - top - margin - (rows - 1) * gap) // rows
+        th = (self.height - top - bottom - margin - (rows - 1) * gap) // rows
         return [(margin + (i % cols) * (tw + gap), top + (i // cols) * (th + gap), tw, th)
                 for i in range(n)]
 
@@ -276,22 +347,28 @@ class Launcher:
         p.text_centered(x + w // 2, y + (h - cv.GLYPH_H * 3) // 2, label, 3, TEXT)
 
     def draw(self) -> None:
+        with self._lock:
+            self._draw()
+
+    def _draw(self) -> None:
         buf = bytearray(self.frame.frame_bytes)
         p = Painter(buf, self.width, self.height)
         p.rect(0, 0, self.width, self.height, BG)
         self.targets = []
         if self.page < 0:
-            p.text(20, 20, "MIRRORLINK PI", 3, TEXT)
-            if self.status:
-                s = display_name(self.status)
-                p.text(self.width - 20 - cv.text_width(s, 2), 24, s, 2, DIM)
+            self._status_bar(p)
             items = [(app.name, app.tile_colour, ("app", app))
                      for app in self.visible_favourites[:7]]
             items.append(("All apps", "#3a3f47", ("all", None)))
             cols = 4 if len(items) > 6 else 3
             rows = -(-len(items) // cols)
-            for box, (name, colour, target) in zip(self._grid(len(items), cols, rows, self.TOP),
-                                                   items, strict=False):
+            notice_h = 34 if self.notice else 0
+            if notice_h:
+                p.rect(0, self.height - notice_h, self.width, notice_h, RED)
+                p.text_centered(self.width // 2, self.height - notice_h + 10,
+                                self.notice.upper()[:64], 2, TEXT)
+            grid = self._grid(len(items), cols, rows, self.TOP, bottom=notice_h)
+            for box, (name, colour, target) in zip(grid, items, strict=False):
                 self._tile(p, box, name, colour, big=True)
                 self.targets.append((box, target))
         else:
@@ -315,16 +392,27 @@ class Launcher:
                                            self.TOP + 4), apps, strict=False):
                 self._tile(p, box, app.name, app.tile_colour, big=False)
                 self.targets.append((box, ("app", app)))
+        if self.focus is not None and self.targets:
+            order = sorted(self.targets, key=lambda t: (t[0][1] < self.TOP, t[0][1], t[0][0]))
+            self.focus = min(self.focus, len(order) - 1)
+            x, y, w, h = order[self.focus][0]
+            for i in range(4):                            # a 4 px frame around it
+                p.rect(x - 4 + i, y - 4 + i, w + 8 - 2 * i, 1, FOCUS)
+                p.rect(x - 4 + i, y + h + 3 - i, w + 8 - 2 * i, 1, FOCUS)
+                p.rect(x - 4 + i, y - 4 + i, 1, h + 8 - 2 * i, FOCUS)
+                p.rect(x + w + 3 - i, y - 4 + i, 1, h + 8 - 2 * i, FOCUS)
         self.frame.update(bytes(buf))
 
     @property
-    def home_rect(self) -> tuple[int, int, int, int] | None:
-        """(x, y, w, h) of the Home button on the video, None when switched off.
-        "left"/"right" = the middle of that edge, where apps rarely put controls."""
+    def nav_rect(self) -> tuple[int, int, int, int] | None:
+        """(x, y, w, h) of the button strip on the video (Back above Home), None when
+        switched off. "left"/"right" = the middle of that edge, where apps rarely put
+        controls."""
         pos = self.home_position
         if pos == "off":
             return None
-        w, h, m = self.HOME_W, self.HOME_H, self.HOME_MARGIN
+        w, m = self.HOME_W, self.HOME_MARGIN
+        h = self.HOME_H * 2 + self.NAV_GAP if self.back_button else self.HOME_H
         x = m if "left" in pos else self.width - w - m
         if pos in ("left", "right"):
             y = (self.height - h) // 2
@@ -332,18 +420,37 @@ class Launcher:
             y = m if pos.startswith("top") else self.height - h - m
         return x, y, w, h
 
-    def _draw_home_button(self, buf: bytearray) -> None:
-        rect = self.home_rect
+    def nav_buttons(self) -> list[tuple[str, tuple[int, int, int, int]]]:
+        """[(name, rect)]: "back" (when enabled) and "home"."""
+        rect = self.nav_rect
         if rect is None:
-            return
-        x, y, w, h = rect
+            return []
+        x, y, w, _h = rect
+        if not self.back_button:
+            return [("home", (x, y, w, self.HOME_H))]
+        return [("back", (x, y, w, self.HOME_H)),
+                ("home", (x, y + self.HOME_H + self.NAV_GAP, w, self.HOME_H))]
+
+    @property
+    def home_rect(self) -> tuple[int, int, int, int] | None:
+        return dict(self.nav_buttons()).get("home")
+
+    def _draw_home_button(self, buf: bytearray) -> None:
+        """Draw the Back and Home buttons."""
         p = Painter(buf, self.width, self.height)
-        p.rounded(x, y, w, h, 12, "#202830")
-        cx, top = x + w // 2, y + (h - 28) // 2
-        for i in range(8):                                    # roof
-            p.rect(cx - 2 - i * 2, top + i, 4 + i * 4, 1, TEXT)
-        p.rect(cx - 11, top + 8, 22, 20, TEXT)                # house
-        p.rect(cx - 4, top + 18, 8, 10, "#202830")            # door
+        for name, (x, y, w, h) in self.nav_buttons():
+            p.rounded(x, y, w, h, 12, "#202830")
+            cx, cy = x + w // 2, y + h // 2
+            if name == "home":
+                top = y + (h - 28) // 2
+                for i in range(8):                                # roof
+                    p.rect(cx - 2 - i * 2, top + i, 4 + i * 4, 1, TEXT)
+                p.rect(cx - 11, top + 8, 22, 20, TEXT)            # house
+                p.rect(cx - 4, top + 18, 8, 10, "#202830")        # door
+            else:
+                for i in range(11):                               # arrow head ◀
+                    p.rect(cx - 12 + i, cy - i, 1, 2 * i + 1, TEXT)
+                p.rect(cx - 1, cy - 3, 13, 7, TEXT)               # shaft
 
     def home_button_runs(self) -> list[tuple[int, bytes]]:
         """The button as (byte offset, bytes) runs, one per row, drawn once.
@@ -354,7 +461,7 @@ class Launcher:
         """
         if getattr(self, "_home_runs", None) is None:
             runs: list[tuple[int, bytes]] = []
-            rect = self.home_rect
+            rect = self.nav_rect
             if rect is not None:
                 black = bytearray(self.width * self.height * 2)
                 white = bytearray(b"\xff" * len(black))
@@ -379,17 +486,109 @@ class Launcher:
             buf[offset:offset + len(run)] = run
         return bytes(buf)
 
+    # ----- status bar -----
+
+    def _status_bar(self, p: Painter) -> None:
+        st = self.state
+        clock = st.clock()
+        self._clock_shown = clock
+        x = 16
+        if clock:
+            p.text(x, 18, clock, 4, TEXT)
+            x += cv.text_width(clock, 4) + 22
+        else:
+            p.text(x, 22, "MIRRORLINK PI", 3, TEXT)
+            x += cv.text_width("MIRRORLINK PI", 3) + 22
+        if st.signal is not None:                         # signal bars + network type
+            for i in range(4):
+                h = 6 + i * 5
+                p.rect(x + i * 8, 44 - h, 5, h, TEXT if i < st.signal else OFF)
+            x += 34
+            if st.network:
+                p.text(x, 30, st.network, 2, TEXT)
+                x += cv.text_width(st.network, 2)
+            x += 20
+        if st.battery is not None:                        # battery outline, fill, percent
+            p.rect(x, 22, 36, 20, DIM)
+            p.rect(x + 2, 24, 32, 16, BG)
+            p.rect(x + 36, 28, 3, 8, DIM)
+            fill = GREEN if st.charging or st.battery > 20 else (
+                AMBER if st.battery > 10 else RED)
+            p.rect(x + 3, 25, max(1, 30 * st.battery // 100), 14, fill)
+            if st.charging:                               # a small bolt across the battery
+                for i in range(7):
+                    p.rect(x + 20 - i, 25 + i, 3, 1, BG)
+                p.rect(x + 14, 32, 7, 1, BG)
+                for i in range(7):
+                    p.rect(x + 18 - i, 32 + i, 3, 1, BG)
+            p.text(x + 46, 26, f"{st.battery}%", 2, TEXT)
+        # right-hand buttons
+        y, h = 8, 48
+        right = self.width - 16
+        screen = (right - 64, y, 64, h)
+        dnd = (right - 64 - 10 - 64, y, 64, h)
+        nxt = (dnd[0] - 24 - 56, y, 56, h)
+        play = (nxt[0] - 8 - 56, y, 56, h)
+        prev = (play[0] - 8 - 56, y, 56, h)
+        for box, key in ((prev, "previous"), (play, "play_pause"), (nxt, "next")):
+            p.rounded(*box, 10, BUTTON)
+            self._media_icon(p, box, key)
+            self.targets.append((box, ("media", key)))
+        p.rounded(*dnd, 10, ACTIVE_DND if st.dnd else BUTTON)    # Do Not Disturb: ⊖
+        cx, cy = dnd[0] + dnd[2] // 2, y + h // 2
+        p.rounded(cx - 12, cy - 12, 24, 24, 12, TEXT if st.dnd is not None else DIM)
+        p.rect(cx - 7, cy - 2, 14, 4, ACTIVE_DND if st.dnd else BUTTON)
+        self.targets.append((dnd, ("dnd", None)))
+        p.rounded(*screen, 10, ACTIVE_SCREEN if st.screen_on else BUTTON)  # phone screen
+        cx = screen[0] + screen[2] // 2
+        p.rounded(cx - 9, y + 9, 18, 30, 3, TEXT)
+        p.rect(cx - 7, y + 13, 14, 22, "#90caf9" if st.screen_on else "#202830")
+        self.targets.append((screen, ("screen", None)))
+
+    @staticmethod
+    def _triangle(p: Painter, x: int, y: int, h: int, right: bool, colour) -> None:
+        for i in range(h):
+            w = h // 2 - abs(i - h // 2) + 1
+            p.rect(x if right else x + h // 2 + 1 - w, y + i, w, 1, colour)
+
+    def _media_icon(self, p: Painter, box, key: str) -> None:
+        x, y, w, h = box
+        cx, cy, s = x + w // 2, y + h // 2, 18
+        if key == "previous":
+            p.rect(cx - 10, cy - s // 2, 3, s, TEXT)
+            self._triangle(p, cx - 6, cy - s // 2, s, False, TEXT)
+        elif key == "next":
+            self._triangle(p, cx - 4, cy - s // 2, s, True, TEXT)
+            p.rect(cx + 7, cy - s // 2, 3, s, TEXT)
+        else:                                             # play/pause: ▶ ‖
+            self._triangle(p, cx - 13, cy - s // 2, s, True, TEXT)
+            p.rect(cx + 3, cy - s // 2, 4, s, TEXT)
+            p.rect(cx + 10, cy - s // 2, 4, s, TEXT)
+
     # ----- hit testing -----
 
     def target_at(self, x: int, y: int) -> Target | None:
-        for (tx, ty, tw, th), target in self.targets:
+        with self._lock:
+            targets = list(self.targets)
+        for (tx, ty, tw, th), target in targets:
             if tx <= x < tx + tw and ty <= y < ty + th:
                 return target
         return None
 
-    def in_home_button(self, x: int, y: int) -> bool:
-        rect = self.home_rect
+    def nav_button_at(self, x: int, y: int) -> str | None:
+        """"back", "home" or None. The gap between the two counts as neither."""
+        for name, (bx, by, bw, bh) in self.nav_buttons():
+            if bx <= x < bx + bw and by <= y < by + bh:
+                return name
+        return None
+
+    def in_nav(self, x: int, y: int) -> bool:
+        """Anywhere on the button strip (taps there never reach the phone)."""
+        rect = self.nav_rect
         if rect is None:
             return False
         bx, by, bw, bh = rect
         return bx <= x < bx + bw and by <= y < by + bh
+
+    def in_home_button(self, x: int, y: int) -> bool:
+        return self.nav_button_at(x, y) == "home"

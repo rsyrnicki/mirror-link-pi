@@ -48,6 +48,17 @@ applist_namespace = false
 app_trust_level = "0x80"
 
 [[variant]]
+name = "s6-audio-home-bt"
+# Not first on purpose: try it with [experiment] start_variant = "s6-audio-home-bt".
+description = "s6-audio-home plus the phone's Bluetooth A2DP/HFP audio entries and Bluetooth address, so the car can use the phone's Bluetooth as the audio link. Same as s6-audio-home until the phone's address is known."
+home_app = true
+rtp_apps = true
+bt_apps = true
+allowed_profile_ids = true
+applist_namespace = false
+app_trust_level = "0x80"
+
+[[variant]]
 name = "s6-audio-legacy"
 description = "legacy-session3 (what the car launched in May) plus S6-style RTP audio entries."
 app_category = "0x00000000"

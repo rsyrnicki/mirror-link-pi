@@ -238,3 +238,122 @@ def test_fit_box_width_is_simd_safe():
     for src in ((480, 800), (720, 1600), (1080, 2340), (600, 1024)):
         x, _y, w, _h = ph.fit_box(*src, 800, 480)
         assert w % 16 == 0 and 2 * x + w <= 800
+
+
+def test_port_scan_finds_a_listener():
+    import socket as sk
+    srv = sk.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen()
+    port = srv.getsockname()[1]
+    try:
+        assert port in ph.scan_open_ports("127.0.0.1", port - 50, port + 50)
+    finally:
+        srv.close()
+
+
+def test_phone_found_by_scan_when_mdns_is_silent(tmp_path, monkeypatch):
+    """Screen off: no mDNS answer, so the Pi scans; next time it tries that port first."""
+    from mlpi.session import Session
+    connects = []
+
+    class FakeAdb:
+        def devices(self):
+            return []
+
+        def connect(self, target):
+            connects.append(target)
+            return target.endswith(":41669")
+
+        def state(self, target):
+            return "device"
+
+    scans = []
+    monkeypatch.setattr(ph, "discover_adb_tls", lambda *a, **k: [])
+    monkeypatch.setattr(ph, "scan_open_ports", lambda ip, a, b: scans.append(ip) or [41669])
+    session = Session(tmp_path / "sessions" / "0001")
+    cfg = types.SimpleNamespace(adb="adb", adb_home="", legacy_port=5555, interface="wlan0")
+    link = ph.PhoneLink(cfg, types.SimpleNamespace(width=800, height=480), switch=None,
+                        session=session, candidates=lambda: ["192.168.8.44"], adb=FakeAdb())
+    assert link._find_device() == "192.168.8.44:41669"
+    assert scans == ["192.168.8.44"]
+    assert (tmp_path / "phone-adb-port").read_text().strip() == "41669"
+
+    connects.clear()
+    link2 = ph.PhoneLink(cfg, types.SimpleNamespace(width=800, height=480), switch=None,
+                         session=session, candidates=lambda: ["192.168.8.44"], adb=FakeAdb())
+    assert link2._find_device() == "192.168.8.44:41669"
+    assert connects == ["192.168.8.44:5555", "192.168.8.44:41669"]   # remembered: no scan
+    assert scans == ["192.168.8.44"]
+    session.close()
+
+
+def test_car_keyboard_types_text_and_backspace_deletes_after_typing():
+    # test_serialize_inject_text: {SC_CONTROL_MSG_TYPE_INJECT_TEXT, 0, 0, 0, 13, "hello, world!"}
+    assert ph.text_message("hello, world!") == bytes([1, 0, 0, 0, 13]) + b"hello, world!"
+    assert ph.keysym_char(0x61) == "a" and ph.keysym_char(0xE4) == "ä"
+    assert ph.keysym_char(0x010020AC) == "€" and ph.keysym_char(0xFFB7) == "7"
+    assert ph.keysym_char(0xFF08) == "" and ph.keysym_char(0x30000000) == ""
+
+    sent = []
+    link = ph.PhoneLink(types.SimpleNamespace(adb="adb", adb_home=""),
+                        types.SimpleNamespace(width=800, height=480), switch=None)
+    link._send = sent.append
+    link.on_key(0xFF08, True)                     # nothing typed yet: BackSpace = Back
+    assert sent[-1] == ph.keycode_message(0, ph.KEYCODE_BACK)
+    link.on_key(0x61, True)
+    link.on_key(0x61, False)                      # the release types nothing more
+    assert sent[-1] == ph.text_message("a")
+    link.on_key(0xFF08, True)
+    assert sent[-1] == ph.keycode_message(0, ph.KEYCODE_DEL)
+    link.on_key(0xFF0D, False)
+    assert sent[-1] == ph.keycode_message(1, ph.KEYCODE_ENTER)
+
+
+CONNECTIVITY_WIFI_DEFAULT = """\
+Active default network: 175
+  NetworkAgentInfo{network{172}  ni{MOBILE[NR] CONNECTED extra: apn} Score(...IS_VALIDATED)
+  NetworkAgentInfo{network{175}  ni{WIFI CONNECTED extra: } Score(...ACCEPT_UNVALIDATED)
+"""
+
+
+def test_wifi_as_default_network_is_detected():
+    assert ph.wifi_is_default_network(CONNECTIVITY_WIFI_DEFAULT)
+    assert not ph.wifi_is_default_network(
+        CONNECTIVITY_WIFI_DEFAULT.replace("network: 175", "network: 172"))
+    assert not ph.wifi_is_default_network("")
+
+
+def test_stuck_offline_connection_is_dropped_and_adb_restarted():
+    calls = []
+
+    class FakeAdb:
+        def connect(self, target):
+            return True
+
+        def state(self, target):
+            return "offline"
+
+        def run(self, *args, serial="", timeout=20.0):
+            calls.append(args)
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    link = ph.PhoneLink(types.SimpleNamespace(adb="adb", adb_home=""),
+                        types.SimpleNamespace(width=800, height=480), switch=None,
+                        adb=FakeAdb())
+    for _ in range(ph.OFFLINE_RESTART_AFTER):
+        assert link._try_targets(["192.168.8.45:40445"]) == ""
+    assert calls.count(("disconnect", "192.168.8.45:40445")) == ph.OFFLINE_RESTART_AFTER
+    assert calls.count(("kill-server",)) == 1
+
+
+def test_only_addresses_of_connected_phones_are_tried():
+    from mlpi.dhcp import DhcpServer
+    d = DhcpServer(interface="wlan0", server_ip="192.168.8.1", prefix=24,
+                   client_ip="192.168.8.44", offer_router=False, offer_dns=False,
+                   session=None, is_car=False)
+    assert d.lease_for("aa:aa:aa:aa:aa:aa") == "192.168.8.44"      # before "Forget"
+    assert d.lease_for("bb:bb:bb:bb:bb:bb") == "192.168.8.45"      # new random MAC
+    assert d.connected_addresses(["BB:BB:BB:BB:BB:BB"]) == ["192.168.8.45"]
+    assert d.connected_addresses([]) == []
+    assert d.connected_addresses(None) == ["192.168.8.45", "192.168.8.44"]

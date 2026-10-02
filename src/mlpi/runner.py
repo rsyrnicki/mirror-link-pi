@@ -166,6 +166,7 @@ def _variant_manager(cfg: Config, variants_file: Path, session: Session) -> Vari
             cycles_per_variant=cfg.experiment.cycles_per_variant,
             session=session,
             state_dir=Path(cfg.session.root),
+            start_variant=cfg.experiment.start_variant,
         )
     except Exception as exc:  # noqa: BLE001 - never lose a car trip to a typo
         message = f"variants unusable ({exc!r}); running the spec-1.0 default only"
@@ -208,7 +209,16 @@ def _start_phone_mode(cfg: Config, phone_link, router: InputRouter, stop: thread
             wifi_dhcp.serve_forever()
     guarded("wifi-dhcp", serve_wifi_dhcp, stop, session)
 
-    phone_link.candidates = wifi_dhcp.leased_addresses
+    def candidates() -> list[str]:
+        from .health import wifi_stations
+        # No station list (none associated, or `iw` missing; the two look alike):
+        # every lease, as before.
+        try:
+            macs = [st["mac"] for st in wifi_stations(pc.interface)] or None
+        except Exception:
+            macs = None
+        return wifi_dhcp.connected_addresses(macs)
+    phone_link.candidates = candidates
     router.attach_phone(phone_link.frame, phone_link)
     guarded("phone", phone_link.run, stop, session)
     return wifi_dhcp

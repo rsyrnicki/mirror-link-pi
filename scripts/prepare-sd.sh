@@ -10,6 +10,15 @@
 #   adb + FFmpeg's libavcodec/libswscale installed into the image (needs
 #   qemu-user-static on this laptop),
 #   the pinned scrcpy server, and the adb key paired with `mlpi pair-phone`.
+#   The login is set up here too (default user mlpi, password mlpi, hostname mlpi;
+#   --user/--password/--hostname change it; --wifi-password keeps the hotspot password
+#   your phone already knows), so Raspberry Pi Imager's own settings
+#   are not needed and the first boot never stops at the user-creation wizard.
+#   add --data-partition (freshly flashed card only) to put all recordings on their
+#   own partition, so a power cut can't damage the system: docs/pi-deployment.md.
+#   add --ssh to allow updates over the USB cable later (scripts/update-pi.sh):
+#   SSH on, key login with a key made for this laptop (~/.config/mlpi/ssh/),
+#   no password login on the USB link and the phone hotspot.
 #
 # What it does (idempotent, safe to re-run to update the code on the card):
 #   rootfs  /opt/mlpi                        code (src, config, systemd, scripts)
@@ -28,6 +37,14 @@ DEV=""
 BOOT=""
 ROOT=""
 PHONE=0
+SSH=0
+DATA=0
+NEW_USER="mlpi"
+NEW_PASSWORD="mlpi"
+NEW_HOSTNAME="mlpi"
+PASSWORD_GIVEN=0
+WIFI_PASSWORD=""
+DATA_PART="${MLPI_DATA_PART:-}"     # set by --data-partition (env: tests only)
 MOUNTED=()
 BINDS=()            # chroot bind mounts: unmounted only, never rmdir'd
 RESOLV_SAVED=0
@@ -36,7 +53,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 say() { echo "==> $*"; }
 
 usage() {
-    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -45,6 +62,12 @@ while [[ $# -gt 0 ]]; do
         --boot) BOOT="$2"; shift 2 ;;
         --root) ROOT="$2"; shift 2 ;;
         --phone) PHONE=1; shift ;;
+        --ssh) SSH=1; shift ;;
+        --data-partition) DATA=1; shift ;;
+        --user) NEW_USER="$2"; shift 2 ;;
+        --password) NEW_PASSWORD="$2"; PASSWORD_GIVEN=1; shift 2 ;;
+        --hostname) NEW_HOSTNAME="$2"; shift 2 ;;
+        --wifi-password) WIFI_PASSWORD="$2"; shift 2 ;;
         -h|--help) usage ;;
         /dev/*) DEV="$1"; shift ;;
         *) usage ;;
@@ -65,14 +88,51 @@ cleanup() {
 }
 trap cleanup EXIT
 
+data_partition_config() {
+    # Mount it at /var/lib/mlpi. nofail: if it's ever damaged the Pi still boots
+    # (and records onto the root file system). fsck repairs it at boot (pass 2).
+    sed -i '/[[:space:]]\/var\/lib\/mlpi[[:space:]]/d' "$ROOT/etc/fstab"
+    echo "LABEL=mlpi-data  /var/lib/mlpi  ext4  defaults,noatime,commit=5,nofail,x-systemd.device-timeout=10s  0  2" \
+        >> "$ROOT/etc/fstab"
+    # The system journal stays in RAM: nothing on the root file system is written
+    # during a drive (mlpi copies the journal into each session anyway).
+    cat > "$ROOT/etc/systemd/journald.conf.d/mlpi.conf" <<'CONF'
+# MirrorLink-Pi with a data partition: journal in RAM, the root file system stays idle.
+[Journal]
+Storage=volatile
+RuntimeMaxUse=32M
+CONF
+    rm -rf "$ROOT/var/log/journal"
+    # Root already fills its partition. Pi OS's first-boot resize (Trixie: " resize" →
+    # parted resizepart 2 to the end of the card in the initramfs; Bookworm: the
+    # firstboot init) would now collide with the data partition, and parted can stop
+    # and wait for an answer on the console. So it must not run.
+    sed -i -e 's# init=/usr/lib/raspberrypi-sys-mods/firstboot##' -e 's# resize\b##g' \
+        "$BOOT/cmdline.txt"
+    # Settings and keys written to the root fs's /var/lib/mlpi (e.g. the adb key) go
+    # onto the data partition, which hides that directory once mounted.
+    local mnt
+    mnt="$(mktemp -d /tmp/mlpi-data.XXXX)"
+    mount "$DATA_PART" "$mnt"
+    tar -C "$ROOT/var/lib/mlpi" --exclude=./sessions -cf - . | tar -C "$mnt" -xpf -
+    umount "$mnt"
+    rmdir "$mnt"
+    say "data partition $DATA_PART → /var/lib/mlpi"
+}
+
 if [[ -n "$DEV" ]]; then
     [[ -b "$DEV" ]] || die "$DEV is not a block device"
     ROOT_SRC="$(findmnt -no SOURCE / || true)"
     if [[ -n "$ROOT_SRC" ]] && lsblk -lnpo NAME "$DEV" | grep -qx "$ROOT_SRC"; then
         die "$DEV holds this laptop's root filesystem — wrong device!"
     fi
-    BOOT_PART="$(lsblk -lnpo NAME,FSTYPE "$DEV" | awk '$2=="vfat"{print $1; exit}')"
-    ROOT_PART="$(lsblk -lnpo NAME,FSTYPE "$DEV" | awk '$2=="ext4"{print $1; exit}')"
+    # Right after writing an image, udev may still be identifying the partitions.
+    for _ in $(seq 20); do
+        BOOT_PART="$(lsblk -lnpo NAME,FSTYPE "$DEV" | awk '$2=="vfat"{print $1; exit}')"
+        ROOT_PART="$(lsblk -lnpo NAME,FSTYPE "$DEV" | awk '$2=="ext4"{print $1; exit}')"
+        [[ -n "$BOOT_PART" && -n "$ROOT_PART" ]] && break
+        sleep 0.5
+    done
     [[ -n "$BOOT_PART" && -n "$ROOT_PART" ]] || \
         die "$DEV does not look like a Raspberry Pi OS card (need a vfat and an ext4 partition)"
     # Desktop environments auto-mount the card; take the partitions over.
@@ -81,6 +141,12 @@ if [[ -n "$DEV" ]]; then
             [[ -n "$mp" ]] && umount "$mp"
         done < <(lsblk -lno MOUNTPOINT "$part")
     done
+    DATA_PART="$(lsblk -lnpo NAME,LABEL "$DEV" | awk '$2=="mlpi-data"{print $1; exit}')"
+    [[ -n "$DATA_PART" ]] && say "data partition: $DATA_PART"
+    if (( DATA )) && [[ -z "$DATA_PART" ]]; then
+        DATA_PART="$("$REPO/scripts/make-data-partition.sh" "$DEV" "$ROOT_PART")" || \
+            die "couldn't create the data partition (card unchanged unless said otherwise above)"
+    fi
     BOOT="$(mktemp -d /tmp/mlpi-boot.XXXX)"; mount "$BOOT_PART" "$BOOT"; MOUNTED+=("$BOOT")
     ROOT="$(mktemp -d /tmp/mlpi-root.XXXX)"; mount "$ROOT_PART" "$ROOT"; MOUNTED+=("$ROOT")
     say "mounted $BOOT_PART → $BOOT, $ROOT_PART → $ROOT"
@@ -290,7 +356,8 @@ phone_setup() {
     fi
     # 4. settings on the boot partition: enable phone mode with a random Wi-Fi password
     if ! grep -q '^\[phone\]' "$BOOT/mlpi.toml"; then
-        password="$(python3 -c 'import secrets; print(secrets.token_urlsafe(9))')"
+        password="${WIFI_PASSWORD:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(9))')}"
+        (( ${#password} >= 8 && ${#password} <= 63 )) || die "--wifi-password: 8 to 63 characters"
         printf '\n[phone]\nenabled = true\nwifi_ssid = "MirrorLink-Pi"\nwifi_password = "%s"\nwifi_country = "DE"\n' \
             "$password" >> "$BOOT/mlpi.toml"
     fi
@@ -302,6 +369,176 @@ PHONE_SSID=""
 PHONE_PSK=""
 if (( PHONE )); then
     phone_setup
+fi
+
+# ---------- SSH for updates over the USB cable (--ssh) ----------
+
+ssh_setup() {
+    # The Pi user is only created at first boot (from Imager's settings), so the key
+    # can't go into its home yet: /etc/mlpi/authorized_keys works for any user.
+    local owner home keydir unit
+    owner="${SUDO_USER:-root}"
+    home="$(getent passwd "$owner" | cut -d: -f6)"
+    keydir="${MLPI_SSH_KEYDIR:-$home/.config/mlpi/ssh}"
+    if [[ ! -f "$keydir/id_ed25519" ]]; then
+        command -v ssh-keygen >/dev/null || die "--ssh needs ssh-keygen (package openssh-client)"
+        sudo -u "$owner" mkdir -p "$keydir"
+        chmod 0700 "$keydir"
+        sudo -u "$owner" ssh-keygen -q -t ed25519 -N "" -C "mlpi-update" -f "$keydir/id_ed25519"
+        say "created the update key $keydir/id_ed25519"
+    fi
+    install -d -m 0755 "$ROOT/etc/mlpi" "$ROOT/etc/ssh/sshd_config.d"
+    install -m 0644 "$keydir/id_ed25519.pub" "$ROOT/etc/mlpi/authorized_keys"
+    cat > "$ROOT/etc/ssh/sshd_config.d/mlpi.conf" <<'CONF'
+# MirrorLink-Pi (prepare-sd.sh --ssh): the laptop that prepared the card may log in
+# with its update key; on the USB link and the phone hotspot only with keys.
+AuthorizedKeysFile .ssh/authorized_keys /etc/mlpi/authorized_keys
+Match LocalAddress 192.168.7.2,192.168.8.1
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+CONF
+    unit=""
+    for candidate in "$ROOT"/usr/lib/systemd/system/ssh.service \
+                     "$ROOT"/lib/systemd/system/ssh.service; do
+        [[ -f "$candidate" ]] && { unit="$candidate"; break; }
+    done
+    install -d "$ROOT/etc/systemd/system/multi-user.target.wants"
+    if [[ -n "$unit" ]]; then
+        ln -sfn "/${unit#"$ROOT"/}" "$ROOT/etc/systemd/system/multi-user.target.wants/ssh.service"
+    else
+        touch "$BOOT/ssh"         # older images: enabled at first boot by sshswitch
+    fi
+    say "SSH enabled: update later with ./scripts/update-pi.sh <pi-user>@192.168.7.2"
+}
+
+# ---------- login: user, password, hostname (no Imager settings needed) ----------
+
+account_setup() {
+    # Pi OS images ship a placeholder user "pi" (uid 1000, no shell, locked). On first
+    # boot userconfig.service renames it from userconf.txt, Imager's cloud-init
+    # settings, or (if neither took) an interactive wizard on the console: the boot
+    # then waits forever on a headless Pi. We do the rename here, offline, and switch
+    # those first-boot steps off.
+    local first hash
+    first="$(awk -F: '$3==1000{print $1}' "$ROOT/etc/passwd")"
+    if [[ "$first" == "$NEW_USER" ]]; then
+        if (( PASSWORD_GIVEN )); then
+            hash="$(openssl passwd -6 "$NEW_PASSWORD")"
+            python3 - "$ROOT" "$NEW_USER" "$hash" <<'PY'
+import sys, pathlib
+root, user, hash_ = sys.argv[1:]
+p = pathlib.Path(root, "etc/shadow")
+p.write_text("".join(
+    ":".join([user, hash_] + l.split(":")[2:]) if l.split(":")[0] == user else l
+    for l in p.read_text().splitlines(True)))
+PY
+            say "password of $NEW_USER changed"
+        else
+            say "user $NEW_USER already set up"
+        fi
+        return
+    fi
+    if [[ "$first" != "pi" ]] || ! grep -q '^pi:[^:]*:1000:.*nologin' "$ROOT/etc/passwd"; then
+        say "user '${first:-?}' already set up on this card (not touching it)"
+        return
+    fi
+    [[ "$NEW_USER" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "--user: lower-case letters, digits, '-'"
+    command -v openssl >/dev/null || die "setting the password needs openssl on this laptop"
+    hash="$(openssl passwd -6 "$NEW_PASSWORD")"
+    python3 - "$ROOT" "$NEW_USER" "$hash" <<'PY'
+import pathlib, sys
+root, new, hash_ = sys.argv[1:]
+etc = pathlib.Path(root, "etc")
+
+def rewrite(name, fix):
+    p = etc / name
+    if p.exists():
+        p.write_text("".join(fix(l.rstrip("\n").split(":")) + "\n"
+                             for l in p.read_text().splitlines()))
+
+def members(field):                       # "a,pi,b" → "a,<new>,b"
+    return ",".join(new if m == "pi" else m for m in field.split(",")) if field else field
+
+def passwd(f):
+    if f[0] == "pi":
+        f[0], f[5], f[6] = new, f"/home/{new}", "/bin/bash"
+    return ":".join(f)
+
+def shadow(f):
+    if f[0] == "pi":
+        f[0], f[1] = new, hash_
+    return ":".join(f)
+
+def group(f):
+    f[0] = new if f[0] == "pi" else f[0]
+    f[3] = members(f[3])
+    return ":".join(f)
+
+def gshadow(f):
+    f[0] = new if f[0] == "pi" else f[0]
+    f[2], f[3] = members(f[2]), members(f[3])
+    return ":".join(f)
+
+def subid(f):
+    f[0] = new if f[0] == "pi" else f[0]
+    return ":".join(f)
+
+rewrite("passwd", passwd)
+rewrite("shadow", shadow)
+rewrite("group", group)
+rewrite("gshadow", gshadow)
+rewrite("subuid", subid)
+rewrite("subgid", subid)
+PY
+    if [[ -d "$ROOT/home/pi" && ! -e "$ROOT/home/$NEW_USER" ]]; then
+        mv "$ROOT/home/pi" "$ROOT/home/$NEW_USER"
+    fi
+    install -d -m 0755 "$ROOT/etc/sudoers.d"
+    echo "$NEW_USER ALL=(ALL) NOPASSWD: ALL" > "$ROOT/etc/sudoers.d/010_mlpi-nopasswd"
+    chmod 0440 "$ROOT/etc/sudoers.d/010_mlpi-nopasswd"
+    # What cancel-rename does once the user exists: wizard off, console login on.
+    rm -f "$ROOT/etc/systemd/system/multi-user.target.wants/userconfig.service"
+    install -d "$ROOT/etc/systemd/system/getty.target.wants"
+    ln -sfn /usr/lib/systemd/system/getty@.service \
+        "$ROOT/etc/systemd/system/getty.target.wants/getty@tty1.service"
+    rm -f "$ROOT/etc/ssh/sshd_config.d/rename_user.conf"
+    # cloud-init only applies Imager's settings; with the work done it must not
+    # re-create "pi" or rename the host.
+    if [[ -d "$ROOT/etc/cloud" ]]; then
+        touch "$ROOT/etc/cloud/cloud-init.disabled"
+    fi
+    rm -f "$BOOT/userconf" "$BOOT/userconf.txt" "$BOOT/firstrun.sh"
+    if (( PASSWORD_GIVEN )); then
+        say "login: user $NEW_USER, password as given"
+    else
+        say "login: user $NEW_USER, password $NEW_PASSWORD (change it with --password)"
+    fi
+}
+
+hostname_setup() {
+    local old
+    old="$(cat "$ROOT/etc/hostname" 2>/dev/null || echo raspberrypi)"
+    [[ "$old" == "$NEW_HOSTNAME" ]] && return
+    echo "$NEW_HOSTNAME" > "$ROOT/etc/hostname"
+    if grep -q '^127\.0\.1\.1' "$ROOT/etc/hosts" 2>/dev/null; then
+        sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t\t$NEW_HOSTNAME/" "$ROOT/etc/hosts"
+    else
+        printf '127.0.1.1\t\t%s\n' "$NEW_HOSTNAME" >> "$ROOT/etc/hosts"
+    fi
+    say "hostname: $NEW_HOSTNAME"
+}
+
+account_setup
+hostname_setup
+
+if (( SSH )); then
+    ssh_setup
+fi
+
+if [[ -n "$DATA_PART" ]]; then
+    data_partition_config
+elif (( DATA )); then
+    echo "WARNING: --data-partition needs the card device (/dev/sdX), not --boot/--root" >&2
 fi
 
 sync

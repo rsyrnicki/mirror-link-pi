@@ -182,6 +182,17 @@ class DhcpServer:
     def leased_addresses(self) -> list[str]:
         return list(self._leases.values())
 
+    def connected_addresses(self, macs: list[str] | None) -> list[str]:
+        """Leases of the given client MACs (those associated right now), newest lease
+        first. A phone that forgot and re-joined the network comes back with a new
+        random MAC and a new address; the old lease is dead. None = MACs unknown:
+        every lease, newest first."""
+        leases = list(self._leases.items())[::-1]
+        if macs is None:
+            return [ip for _mac, ip in leases]
+        wanted = {m.lower() for m in macs}
+        return [ip for mac, ip in leases if mac.lower() in wanted]
+
     def lease_for(self, mac: str) -> str:
         ip = self._leases.get(mac)
         if ip is None:

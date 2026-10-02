@@ -21,9 +21,12 @@ Protocol summary for scrcpy 4.1, forward tunnel, audio off:
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import random
+import re
+import selectors
 import socket
 import struct
 import subprocess
@@ -47,7 +50,9 @@ CODEC_H264 = 0x68323634
 
 # Control message types (scrcpy app/src/control_msg.h, enum order).
 MSG_INJECT_KEYCODE = 0
+MSG_INJECT_TEXT = 1
 MSG_INJECT_TOUCH_EVENT = 2
+MSG_INJECT_SCROLL_EVENT = 3
 MSG_BACK_OR_SCREEN_ON = 4
 MSG_SET_DISPLAY_POWER = 10
 MSG_START_APP = 16
@@ -57,6 +62,24 @@ ACTION_DOWN, ACTION_UP, ACTION_MOVE = 0, 1, 2
 POINTER_ID_GENERIC_FINGER = (1 << 64) - 2           # UINT64_C(-2)
 
 KEYCODE_HOME, KEYCODE_BACK, KEYCODE_DPAD_CENTER = 3, 4, 23
+KEYCODE_ENTER, KEYCODE_DEL = 66, 67
+KEY_BACKSPACE, KEY_RETURN = 0xFF08, 0xFF0D
+TYPING_WINDOW = 30.0     # s after the last typed character: BackSpace deletes, Return enters
+MEDIA_KEYCODES = {"play_pause": 85, "next": 87, "previous": 88}   # KEYCODE_MEDIA_*
+# `cmd media_session dispatch` names: delivered to the app that is playing, whatever
+# display it is on (key events injected into the virtual display don't reach it).
+MEDIA_DISPATCH = {"play_pause": "play-pause", "next": "next", "previous": "previous"}
+
+# The car's rotary knob (MirrorLink Part 2, Annex B Table B.1, knob 0).
+KNOB_RIGHT, KNOB_LEFT, KNOB_UP, KNOB_DOWN = 0x30000000, 0x30000001, 0x30000002, 0x30000005
+KNOB_PUSH = 0x30000008
+KNOB_CW, KNOB_CCW = 0x3000000E, 0x3000000F          # rotate z clockwise / anti-clockwise
+KNOB_DPAD = {KNOB_UP: 19, KNOB_DOWN: 20, KNOB_LEFT: 21, KNOB_RIGHT: 22}   # KEYCODE_DPAD_*
+STATUS_POLL_SECONDS = 30
+CONNECTIVITY_RECHECK_SECONDS = 120
+OFFLINE_RESTART_AFTER = 6       # adb connects stuck "offline" before restarting adb
+NOT_FOUND_HINT = "NOT FOUND: IS WIRELESS DEBUGGING ON?"
+REFUSED_HINT = "THE PHONE DOESN'T KNOW THIS PI: PAIR IT"
 
 # Car keys (MirrorLink device keys, Part 2 Annex B, and plain X11 keysyms) → Android.
 KEYMAP = {
@@ -81,6 +104,47 @@ def touch_message(action: int, x: int, y: int, width: int, height: int, *,
 
 def keycode_message(action: int, keycode: int, *, repeat: int = 0, metastate: int = 0) -> bytes:
     return struct.pack("!BBIII", MSG_INJECT_KEYCODE, action, keycode, repeat, metastate)
+
+
+def text_message(text: str) -> bytes:
+    """INJECT_TEXT: u32 length + UTF-8 (scrcpy caps it at 300 bytes)."""
+    raw = text.encode()[:300]
+    return struct.pack("!BI", MSG_INJECT_TEXT, len(raw)) + raw
+
+
+def keysym_char(keysym: int) -> str:
+    """The character an X11/RFB keysym types, '' for function keys: Latin-1 keysyms are
+    the character itself, 0x01000000 + code point is any other Unicode character."""
+    if 0x20 <= keysym <= 0x7E or 0xA0 <= keysym <= 0xFF:
+        return chr(keysym)
+    if 0x01000100 <= keysym <= 0x0110FFFF:
+        return chr(keysym - 0x01000000)
+    if 0xFFB0 <= keysym <= 0xFFB9:                       # keypad digits
+        return chr(keysym - 0xFFB0 + ord("0"))
+    return ""
+
+
+def wifi_is_default_network(dumpsys: str) -> bool:
+    """True if `dumpsys connectivity` shows Wi-Fi (the Pi's, which has no internet) as
+    the phone's default network: then apps have no internet. Happens when the phone
+    was told to "stay connected" to it (the network is then marked acceptUnvalidated)."""
+    m = re.search(r"Active default network:\s*(\d+)", dumpsys)
+    if not m:
+        return False
+    for line in dumpsys.splitlines():
+        if f"network{{{m.group(1)}}}" in line and "NetworkAgentInfo" in line:
+            return "ni{WIFI" in line
+    return False
+
+
+def scroll_message(x: int, y: int, width: int, height: int, hscroll: float,
+                   vscroll: float, buttons: int = 0) -> bytes:
+    """Mouse-wheel event at x, y; 1.0 = one notch. scrcpy sends the amounts as signed
+    16-bit fixed point of value/16 (ControlMessageReader.parseInjectScrollEvent)."""
+    def fp(v: float) -> int:
+        return max(-0x8000, min(0x7FFF, round(v / 16 * 0x8000)))
+    return struct.pack("!BiiHHhhi", MSG_INJECT_SCROLL_EVENT, x, y, width, height,
+                       fp(hscroll), fp(vscroll), buttons)
 
 
 def back_or_screen_on_message(action: int) -> bytes:
@@ -250,6 +314,8 @@ class Decoder:
 
 MDNS_ADDR = ("224.0.0.251", 5353)
 ADB_TLS_SERVICE = "_adb-tls-connect._tcp.local"
+ADB_PAIRING_SERVICE = "_adb-tls-pairing._tcp.local"   # while "Pair with code" is open
+PAIR_PAGE_AFTER = 20.0     # s on the hotspot without adb before the car shows pairing
 TYPE_A, TYPE_PTR, TYPE_SRV = 1, 12, 33
 
 
@@ -307,9 +373,64 @@ def parse_mdns(data: bytes) -> dict:
     return out
 
 
-def discover_adb_tls(interface: str, local_ip: str, *,
-                     timeout: float = 2.0) -> list[tuple[str, int]]:
-    """Ask the Wi-Fi network for wireless-debugging endpoints: [(ip, port), ...]."""
+# Wireless debugging listens on a kernel-chosen port: Linux's ephemeral range.
+ADB_PORT_RANGE = (32768, 60999)
+
+
+def scan_open_ports(ip: str, first: int, last: int, *, concurrency: int = 400,
+                    timeout: float = 0.6, deadline: float = 30.0) -> list[int]:
+    """TCP-connect scan of ip:first..last; returns the ports that accepted.
+
+    Finds the phone's Wireless debugging port when mDNS doesn't: Android drops
+    multicast (so mDNS queries) while the screen is off, but plain unicast TCP gets
+    through. Closed ports answer with a reset at once, so ~28 000 ports take a few
+    seconds on the hotspot.
+    """
+    sel = selectors.DefaultSelector()
+    pending: dict[socket.socket, tuple[int, float]] = {}
+    found: list[int] = []
+    ports = iter(range(first, last + 1))
+    stop_at = time.monotonic() + deadline
+    exhausted = False
+    try:
+        while (pending or not exhausted) and time.monotonic() < stop_at:
+            while not exhausted and len(pending) < concurrency:
+                port = next(ports, None)
+                if port is None:
+                    exhausted = True
+                    break
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.setblocking(False)
+                rc = s.connect_ex((ip, port))
+                if rc in (0, errno.EINPROGRESS, errno.EWOULDBLOCK):
+                    pending[s] = (port, time.monotonic() + timeout)
+                    sel.register(s, selectors.EVENT_WRITE)
+                else:
+                    s.close()
+            for key, _ in sel.select(timeout=0.05):
+                s = key.fileobj
+                port, _t = pending.pop(s)
+                sel.unregister(s)
+                if s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) == 0:
+                    found.append(port)
+                s.close()
+            now = time.monotonic()
+            for s, (_port, until) in list(pending.items()):
+                if now > until:                      # no answer at all: give up on it
+                    del pending[s]
+                    sel.unregister(s)
+                    s.close()
+    finally:
+        for s in pending:
+            s.close()
+        sel.close()
+    return sorted(found)
+
+
+def discover_adb_tls(interface: str, local_ip: str, *, timeout: float = 2.0,
+                     service: str = ADB_TLS_SERVICE) -> list[tuple[str, int]]:
+    """Ask the Wi-Fi network for wireless-debugging endpoints: [(ip, port), ...].
+    ``service``: the connect service, or ADB_PAIRING_SERVICE for the pairing dialog."""
     found: list[tuple[str, int]] = []
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     try:
@@ -319,7 +440,7 @@ def discover_adb_tls(interface: str, local_ip: str, *,
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(local_ip))
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
         sock.settimeout(0.5)
-        query = mdns_query()
+        query = mdns_query(service)
         deadline = time.monotonic() + timeout
         next_send = 0.0
         while time.monotonic() < deadline:
@@ -334,7 +455,9 @@ def discover_adb_tls(interface: str, local_ip: str, *,
                 answer = parse_mdns(data)
             except (struct.error, IndexError):
                 continue
-            for _instance, (target, port) in answer["srv"].items():
+            for instance, (target, port) in answer["srv"].items():
+                if not instance.rstrip(".").endswith(service):
+                    continue                  # e.g. the other adb service in the same answer
                 ip = answer["a"].get(target, src)
                 if (ip, port) not in found:
                     found.append((ip, port))
@@ -375,6 +498,12 @@ class Adb:
         out = self.run("connect", target, timeout=8)
         text = (out.stdout + out.stderr).lower()
         return "connected to" in text and "cannot" not in text and "failed" not in text
+
+    def pair(self, target: str, code: str) -> tuple[bool, str]:
+        """`adb pair HOST:PORT CODE` (Android 11+ Wireless debugging)."""
+        out = self.run("pair", target, code, timeout=25)
+        text = (out.stdout + out.stderr).strip()
+        return "successfully paired" in text.lower(), text
 
     def state(self, serial: str) -> str:
         out = self.run("get-state", serial=serial, timeout=8)
@@ -507,11 +636,25 @@ class PhoneLink:
         if getattr(cfg, "launcher", False) and switch is not None:
             from .launcher import Launcher, parse_apps
             self.launcher = Launcher(switch.new_video_frame(), parse_apps(cfg.apps),
-                                     home_button=getattr(cfg, "home_button", "right"))
+                                     home_button=getattr(cfg, "home_button", "right"),
+                                     back_button=getattr(cfg, "back_button", True))
+        # Pairing from the car screen (pairing.py) when the phone doesn't know our key.
+        self.pairing = None
+        if switch is not None:
+            from .pairing import PairingPage
+            self.pairing = PairingPage(switch.new_video_frame())
+        self._pair_press = None
+        self._pair_ip = ""
+        self._unreachable_since: float | None = None
+        self._pairing_dismissed_until = 0.0
         self._tile_press: tuple[int, int] | None = None
-        self._home_press = False
+        self._nav_press: str | None = None   # Back/Home button held down
+        self._last_typed = float("-inf")            # monotonic time of the last typed char
         self._show_video_on_frame = False
         self.device_name = ""
+        self._serial = ""
+        self._last_scan = float("-inf")
+        self._offline_count = 0                   # connects that ended "offline"
 
     # ----- helpers -----
 
@@ -568,12 +711,34 @@ class PhoneLink:
         self._event("phone_avoid_bad_wifi", before=before, rc=put.returncode,
                     stderr=(put.stderr or "")[:200])
 
-    def _record_connectivity(self, serial: str) -> None:
+    def _learn_bt_address(self, serial: str) -> None:
+        """Remember the phone's Bluetooth address on the card for the next boot's
+        Bluetooth audio entries (the car asks for them before the phone connects)."""
+        from . import btaddr
+        if not self.session:
+            return
+        address = ""
+        for cmd in (("settings", "get", "secure", "bluetooth_address"),
+                    ("dumpsys", "bluetooth_manager")):
+            out = self.adb.run("shell", *cmd, serial=serial, timeout=20)
+            address = btaddr.parse_phone_output(out.stdout or "")
+            if address:
+                break
+        root = self.session.directory.parent.parent        # <root>/sessions/NNNN
+        try:
+            changed = btaddr.remember(root, address)
+        except OSError:
+            changed = False
+        self._event("phone_bt_address", found=bool(address), changed=changed)
+
+    def _record_connectivity(self, serial: str,
+                             stop: threading.Event | None = None) -> None:
         """Snapshot which network the phone uses for the internet (Wi-Fi to the Pi has
         none), 20 s after connecting: full dump to phone-connectivity.txt, the key
         lines as a phone_connectivity event."""
         if getattr(self.cfg, "avoid_bad_wifi", True):
             self._avoid_bad_wifi(serial)
+        self._learn_bt_address(serial)
         if self._stop.wait(20):
             return
         dump = self.adb.run("shell", "dumpsys", "connectivity", serial=serial, timeout=30)
@@ -587,7 +752,70 @@ class PhoneLink:
                 pass
         keys = [line.strip()[:300] for line in text.splitlines()
                 if any(k in line for k in self.CONNECTIVITY_KEYS)]
-        self._event("phone_connectivity", lines=keys[:40])
+        wifi_default = wifi_is_default_network(text)
+        self._event("phone_connectivity", lines=keys[:40], wifi_default=wifi_default)
+        self._show_wifi_notice(wifi_default)
+        # Keep watching: the phone may switch later (and may reset "avoid bad Wi-Fi").
+        stop = stop or threading.Event()
+        while not stop.wait(CONNECTIVITY_RECHECK_SECONDS) and not self._stop.is_set():
+            if getattr(self.cfg, "avoid_bad_wifi", True):
+                self._avoid_bad_wifi(serial)
+            dump = self.adb.run("shell", "dumpsys", "connectivity", serial=serial, timeout=30)
+            if dump.returncode != 0:
+                return                                    # disconnected
+            now = wifi_is_default_network(dump.stdout or "")
+            if now != wifi_default:
+                wifi_default = now
+                self._event("phone_wifi_default", wifi_default=now)
+                self._show_wifi_notice(now)
+
+    def _show_wifi_notice(self, wifi_default: bool) -> None:
+        if self.launcher:
+            self.launcher.set_notice("No internet: phone uses the Pi's Wi-Fi, see phone-mode.md"
+                                     if wifi_default else "")
+
+    def _poll_status(self, serial: str, stop: threading.Event) -> None:
+        """Feed the launcher's status bar: one adb call every 30 s, clock ticks between."""
+        from .phonestatus import POLL_COMMAND, parse_poll
+        logged: dict | None = None
+        while not stop.is_set() and not self._stop.is_set():
+            try:
+                out = self.adb.run("shell", POLL_COMMAND, serial=serial, timeout=15)
+                fields = parse_poll(out.stdout) if out.stdout else {}
+                if fields:
+                    self.launcher.set_state(**fields)
+                # Log the first poll, failures and changes (not the ticking clock).
+                shown = {k: v for k, v in fields.items() if k != "clock_base"}
+                if out.returncode != 0 or shown != logged:
+                    logged = shown
+                    self._event("phone_status_poll", rc=out.returncode, **shown,
+                                stderr=(out.stderr or "")[:200],
+                                battery_raw=(out.stdout or "").split("===")[0][:600]
+                                if "battery" not in shown else "")
+            except Exception as exc:                  # keep polling; the bar is cosmetic
+                log.warning("phone status poll failed: %s", exc)
+                self._event("phone_status_poll_error", error=repr(exc)[:300])
+            for _ in range(STATUS_POLL_SECONDS // 5):
+                if stop.wait(5) or self._stop.is_set():
+                    return
+                self.launcher.tick()
+
+    def _media_key(self, key: str) -> None:
+        """Play/pause, next, previous for the app that is playing. Falls back to a key
+        event on the phone's main display if media_session isn't available."""
+        out = self.adb.run("shell", "cmd", "media_session", "dispatch", MEDIA_DISPATCH[key],
+                           serial=self._serial, timeout=10)
+        ok = out.returncode == 0 and "error" not in (out.stdout + out.stderr).lower()
+        if not ok:
+            out = self.adb.run("shell", "input", "-d", "0", "keyevent",
+                               str(MEDIA_KEYCODES[key]), serial=self._serial, timeout=10)
+        self._event("phone_media_key", key=key, via="media_session" if ok else "keyevent",
+                    rc=out.returncode, output=(out.stdout + out.stderr)[:200])
+
+    def _set_dnd(self, on: bool) -> None:
+        out = self.adb.run("shell", "cmd", "notification", "set_dnd", "on" if on else "off",
+                           serial=self._serial, timeout=15)
+        self._event("phone_dnd", on=on, rc=out.returncode, stderr=(out.stderr or "")[:200])
 
     def _load_app_list(self, serial: str) -> None:
         """Ask the phone for its launchable apps (scrcpy's list_apps) for the
@@ -619,20 +847,26 @@ class PhoneLink:
             if pressed:                               # act on release, like a button
                 if self._tile_press is None:
                     self._tile_press = (x, y)
+                    self.launcher.clear_focus()       # touch users don't need the frame
             elif self._tile_press is not None:
                 target = self.launcher.target_at(*self._tile_press)
                 self._tile_press = None
                 if target is not None and self.launcher.target_at(x, y) == target:
                     self._launcher_action(target)
             return True
-        if self._home_press:                          # swallow until the finger lifts
+        if self._nav_press:                           # swallow until the finger lifts
             if not pressed:
-                self._home_press = False
-                if self.launcher.in_home_button(x, y):
-                    self.show_launcher()
+                name, self._nav_press = self._nav_press, None
+                if self.launcher.nav_button_at(x, y) == name:
+                    if name == "home":
+                        self.show_launcher()
+                    else:                             # the car sends no Back key
+                        self._send(keycode_message(ACTION_DOWN, KEYCODE_BACK))
+                        self._send(keycode_message(ACTION_UP, KEYCODE_BACK))
+                        self._event("phone_back")
             return True
-        if pressed and not self._down and self.launcher.in_home_button(x, y):
-            self._home_press = True
+        if pressed and not self._down and self.launcher.in_nav(x, y):
+            self._nav_press = self.launcher.nav_button_at(x, y) or "gap"
             return True
         return False
 
@@ -649,8 +883,24 @@ class PhoneLink:
             launcher.go(launcher.page - 1)
         elif kind == "next":
             launcher.go(launcher.page + 1)
+        elif kind == "media":
+            threading.Thread(target=self._media_key, args=(value,), name="phone-media",
+                             daemon=True).start()
+        elif kind == "dnd":
+            on = not launcher.state.dnd
+            launcher.set_state(dnd=on)                # show it at once; the poll confirms
+            threading.Thread(target=self._set_dnd, args=(on,), name="phone-dnd",
+                             daemon=True).start()
+        elif kind == "screen":
+            on = not launcher.state.screen_on
+            self._send(display_power_message(on))
+            launcher.set_state(screen_on=on)
+            self._event("phone_screen", on=on)
 
     def on_pointer(self, x: int, y: int, buttons: int) -> None:
+        if self.pairing and self.switch.showing(self.pairing.frame):
+            self._pairing_pointer(x, y, buttons)
+            return
         if self._launcher_pointer(x, y, buttons):
             return
         vw, vh = self._video_size
@@ -676,6 +926,25 @@ class PhoneLink:
         self._send(touch_message(action, fx, fy, vw, vh, pressure=1.0 if pressed else 0.0))
 
     def on_key(self, keysym: int, down: bool) -> None:
+        if self.pairing and self.switch.showing(self.pairing.frame):
+            self._pairing_key(keysym, down)
+            return
+        if self._knob(keysym, down):
+            return
+        char = keysym_char(keysym)
+        if char:                                     # the car's keyboard: type the text
+            if down:
+                self._last_typed = time.monotonic()
+                self._send(text_message(char))
+            return
+        typing = time.monotonic() - self._last_typed < TYPING_WINDOW
+        if typing and keysym in (KEY_BACKSPACE, KEY_RETURN):
+            # Right after typing, BackSpace deletes a character and Return submits
+            # (outside a text field they stay Back and OK).
+            self._last_typed = time.monotonic()
+            code = KEYCODE_DEL if keysym == KEY_BACKSPACE else KEYCODE_ENTER
+            self._send(keycode_message(ACTION_DOWN if down else ACTION_UP, code))
+            return
         keycode = KEYMAP.get(keysym)
         if keycode == KEYCODE_HOME and self.launcher:
             if not down:
@@ -685,6 +954,38 @@ class PhoneLink:
             self._event("phone_key_unmapped", keysym=f"0x{keysym:08x}", down=down)
             return
         self._send(keycode_message(ACTION_DOWN if down else ACTION_UP, keycode))
+
+    def _knob(self, keysym: int, down: bool) -> bool:
+        """The car's rotary knob: moves the highlight on the launcher (push opens), and
+        acts as a scroll wheel inside apps (zoom in Maps, scrolling lists)."""
+        if not KNOB_RIGHT <= keysym <= KNOB_CCW:
+            return False
+        launcher = self.launcher
+        if launcher and self.switch.showing(launcher.frame):
+            if keysym in (KNOB_CW, KNOB_RIGHT, KNOB_DOWN) and down:
+                launcher.move_focus(+1)
+            elif keysym in (KNOB_CCW, KNOB_LEFT, KNOB_UP) and down:
+                launcher.move_focus(-1)
+            elif keysym == KNOB_PUSH and not down:
+                target = launcher.focused()
+                if target is not None:
+                    self._launcher_action(target)
+            return True
+        if keysym in (KNOB_CW, KNOB_CCW):
+            if down:
+                vw, vh = self._video_size
+                notch = -1.0 if keysym == KNOB_CW else 1.0     # clockwise = wheel down
+                if getattr(self.cfg, "knob_invert", False):
+                    notch = -notch
+                self._send(scroll_message(vw // 2, vh // 2, vw, vh, 0.0, notch))
+        elif keysym == KNOB_PUSH:
+            self._send(keycode_message(ACTION_DOWN if down else ACTION_UP,
+                                       KEYCODE_DPAD_CENTER))
+        elif keysym in KNOB_DPAD:
+            self._send(keycode_message(ACTION_DOWN if down else ACTION_UP, KNOB_DPAD[keysym]))
+        else:
+            self._event("phone_key_unmapped", keysym=f"0x{keysym:08x}", down=down)
+        return True
 
     # ----- finding the phone -----
 
@@ -704,21 +1005,195 @@ class PhoneLink:
             return ""
         for ip in ips:
             targets = [f"{ip}:{self.cfg.legacy_port}"] if self.cfg.legacy_port else []
+            last = self._remembered_port()
+            if last:
+                targets.append(f"{ip}:{last}")
             self._set_status(f"looking for wireless debugging on {ip}")
-            targets += [f"{h}:{p}" for h, p in discover_adb_tls(
+            announced = [f"{h}:{p}" for h, p in discover_adb_tls(
                 self.cfg.interface, self.local_ip) if h == ip]
-            for target in targets:
-                if not self.adb.connect(target):
-                    continue
-                state = self.adb.state(target)
-                self._event("phone_adb_connect", target=target, state=state)
-                if state == "device":
-                    return target
-                if state == "unauthorized":
-                    self._set_status("phone refused adb: pair it (docs/phone-mode.md)")
+            found = self._try_targets(targets + announced)
+            if found:
+                return found
+            if announced and self.pairing and \
+                    time.monotonic() >= self._pairing_dismissed_until:
+                # Wireless debugging is on (the phone announced it) but refuses our
+                # key: it doesn't know this Pi. Ask for pairing right away.
+                self._show_pairing(ip, REFUSED_HINT)
+                self._offer_pairing(ip)
+                continue
+            # mDNS got no answer (screen off?): look for the port directly, at most
+            # every 30 s so the phone isn't kept busy.
+            if self._offer_pairing(ip):
+                continue
+            if time.monotonic() - self._last_scan >= 30:
+                self._last_scan = time.monotonic()
+                t0 = time.monotonic()
+                ports = scan_open_ports(ip, *ADB_PORT_RANGE)
+                self._event("phone_port_scan", ip=ip, open=ports[:10],
+                            seconds=round(time.monotonic() - t0, 1))
+                found = self._try_targets([f"{ip}:{p}" for p in ports[:10]])
+                if found:
+                    return found
+                if ports and self.pairing and \
+                        time.monotonic() >= self._pairing_dismissed_until:
+                    self._show_pairing(ip, REFUSED_HINT)   # debugging on, key refused
         if self.status.startswith("looking"):
             self._set_status("phone on Wi-Fi, but wireless debugging is off")
+        if ips and self._unreachable_since is None:
+            self._unreachable_since = time.monotonic()
+        if (ips and self.pairing and time.monotonic() - self._unreachable_since >= PAIR_PAGE_AFTER
+                and time.monotonic() >= self._pairing_dismissed_until):
+            # Not seen at all: often just Wireless debugging off or the phone asleep
+            # (it connects by itself once that's fixed); pairing is the second guess.
+            self._show_pairing(ips[0], NOT_FOUND_HINT)
         return ""
+
+    # ----- pairing from the car screen -----
+
+    def _offer_pairing(self, ip: str) -> bool:
+        """If the phone's "Pair with pairing code" dialog is open, show the number pad
+        with its port filled in. True = pairing page is up (skip the port scan)."""
+        if not self.pairing:
+            return False
+        found = [p for h, p in discover_adb_tls(self.cfg.interface, self.local_ip,
+                                                timeout=1.5, service=ADB_PAIRING_SERVICE)
+                 if h == ip]
+        if found:
+            self.pairing.set_port(found[0])
+            self._show_pairing(ip)
+            return True
+        if not self.pairing.busy:
+            self.pairing.forget_port()                    # dialog closed: port is stale
+        return False
+
+    def _show_pairing(self, ip: str, hint: str = "") -> None:
+        self._pair_ip = ip
+        # Hints replace each other, never a pairing result or what is being typed.
+        if hint and not self.pairing.code and not self.pairing.busy and \
+                self.pairing.message in ("", NOT_FOUND_HINT, REFUSED_HINT) and \
+                self.pairing.message != hint:
+            self.pairing.set_message(hint)
+        if not self.switch.showing(self.pairing.frame):
+            self.switch.show(self.pairing.frame)
+            self._event("phone_pairing_shown", ip=ip, port=self.pairing.port)
+        self._set_status("phone doesn't know this Pi: pair it on the car screen")
+
+    def _pairing_pointer(self, x: int, y: int, buttons: int) -> None:
+        pressed = bool(buttons & 1)
+        if pressed:
+            if self._pair_press is None:
+                self._pair_press = self.pairing.target_at(x, y)
+            return
+        target, self._pair_press = self._pair_press, None
+        if target is None or self.pairing.target_at(x, y) != target:
+            return
+        action = self.pairing.press(target)
+        if action == "later":
+            self._pairing_dismissed_until = time.monotonic() + 120
+            self.pairing.reset()
+            self.switch.show(self.switch.canvas)
+        elif action == "pair":
+            threading.Thread(target=self._pair, args=(self._pair_ip, self.pairing.port,
+                                                      self.pairing.code),
+                             name="phone-pair", daemon=True).start()
+
+    def _pairing_key(self, keysym: int, down: bool) -> None:
+        """The car's keyboard on the pairing page: digits, BackSpace, Return = PAIR."""
+        if down:
+            return
+        char = keysym_char(keysym)
+        if char.isdigit():
+            target = ("digit", char)
+        elif keysym == KEY_BACKSPACE:
+            target = ("del", None)
+        elif keysym == KEY_RETURN:
+            target = ("pair", None)
+        else:
+            return
+        if self.pairing.press(target) == "pair":
+            threading.Thread(target=self._pair, args=(self._pair_ip, self.pairing.port,
+                                                      self.pairing.code),
+                             name="phone-pair", daemon=True).start()
+
+    def _leave_pairing(self) -> None:
+        """Connected without pairing (the phone still knew this Pi's key): say so
+        instead of swapping the page away under the driver's fingers."""
+        from .pairing import GOOD
+        if not (self.pairing and self.switch.showing(self.pairing.frame)):
+            return
+        typed = bool(self.pairing.code)
+        self._event("phone_pairing_not_needed", typed=typed)
+        if typed and not self.pairing.busy:
+            self.pairing.set_message("CONNECTED. NO PAIRING NEEDED", GOOD)
+            self._stop.wait(2.5)
+        self.pairing.reset()
+
+    def _pair(self, ip: str, port: str, code: str) -> None:
+        from .pairing import BAD, GOOD
+        self.pairing.busy = True
+        self.pairing.set_message("PAIRING ...")
+        ok, text = self.adb.pair(f"{ip}:{port}", code)
+        self._event("phone_pair", target=f"{ip}:{port}", ok=ok, output=text[:300])
+        if ok:
+            self.pairing.set_message("PAIRED. CONNECTING ...", GOOD)
+            self._unreachable_since = None
+            self._last_scan = float("-inf")
+            self._stop.wait(1.5)
+            self.pairing.reset()
+            self.pairing.forget_port()
+            if self.switch.showing(self.pairing.frame):
+                self.switch.show(self.switch.canvas)
+        else:
+            self.pairing.busy = False
+            self.pairing.code = ""
+            self.pairing.field = "code"
+            self.pairing.set_message("PAIRING FAILED: CHECK CODE AND PORT", BAD)
+
+    def _try_targets(self, targets: list[str]) -> str:
+        for target in dict.fromkeys(targets):            # unique, in order
+            if not self.adb.connect(target):
+                continue
+            state = self.adb.state(target)
+            self._event("phone_adb_connect", target=target, state=state)
+            if state == "device":
+                self._remember_port(target)
+                self._unreachable_since = None
+                return target
+            if state == "unauthorized":
+                self._set_status("phone refused adb: pair it (docs/phone-mode.md)")
+            # Otherwise adb keeps the entry, answers "already connected" next time and
+            # the state stays "offline" for good.
+            self.adb.run("disconnect", target, timeout=8)
+            if state == "offline":
+                self._offline_count += 1
+                if self._offline_count % OFFLINE_RESTART_AFTER == 0:
+                    out = self.adb.run("kill-server", timeout=15)
+                    self._event("phone_adb_restart", offline=self._offline_count,
+                                rc=out.returncode)
+        return ""
+
+    def _port_file(self) -> Path | None:
+        if not self.session:
+            return None
+        return self.session.directory.parent.parent / "phone-adb-port"
+
+    def _remembered_port(self) -> int:
+        path = self._port_file()
+        try:
+            return int(path.read_text().strip()) if path else 0
+        except (OSError, ValueError):
+            return 0
+
+    def _remember_port(self, target: str) -> None:
+        """Wireless debugging keeps its port until it's switched off; next time we
+        try that port first."""
+        path = self._port_file()
+        port = target.rpartition(":")[2]
+        if path and port.isdigit() and int(port) != self.cfg.legacy_port:
+            try:
+                path.write_text(port + "\n")
+            except OSError:
+                pass
 
     # ----- one streaming session -----
 
@@ -783,8 +1258,14 @@ class PhoneLink:
             if self.launcher:
                 threading.Thread(target=self._load_app_list, args=(serial,),
                                  name="phone-apps", daemon=True).start()
-            threading.Thread(target=self._record_connectivity, args=(serial,),
+            self._serial = serial
+            self._leave_pairing()
+            status_stop = threading.Event()             # ends this connection's helpers
+            threading.Thread(target=self._record_connectivity, args=(serial, status_stop),
                              name="phone-net", daemon=True).start()
+            if self.launcher:
+                threading.Thread(target=self._poll_status, args=(serial, status_stop),
+                                 name="phone-status", daemon=True).start()
             if c.start_app:
                 self._send(start_app_message(c.start_app))
                 self._show_video_on_frame = True
@@ -796,6 +1277,8 @@ class PhoneLink:
                 # Locking the phone blanks the virtual display; a dark (but unlocked)
                 # screen doesn't, and saves battery.
                 self._send(display_power_message(False))
+            if self.launcher:
+                self.launcher.set_state(screen_on=not getattr(c, "screen_off", False))
             video.settimeout(10)
             parser = StreamParser(dummy_byte=False)
             config_packet = b""        # SPS/PPS: kept for decoder restarts
@@ -895,6 +1378,10 @@ class PhoneLink:
                                      f"{self._video_size[1]} {fps:.0f} fps")
                     stats_t, stats_frames, lag_max = time.monotonic(), frames, 0.0
         finally:
+            if "status_stop" in locals():
+                status_stop.set()
+            if self.launcher:
+                self.launcher.set_notice("")      # the next connection checks again
             with self._control_lock:
                 self._control = None
             for sock in (video, control):

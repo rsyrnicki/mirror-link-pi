@@ -192,9 +192,12 @@ def summarise(directory: Path) -> str:
 
 def _phone_section(events: list[dict]) -> list[str]:
     phone = [e for e in events if str(e.get("kind", "")).startswith("phone_")]
-    if not phone:
+    bt = [e for e in events if e.get("kind") == "bt_launch"]
+    if not phone and not bt:
         return []
     out = ["", "Phone:"]
+    for e in bt:
+        out.append(f"  t={e['t']} the car launched the phone's Bluetooth {e.get('protocol')}")
     statuses: list[str] = []
     for e in phone:
         if e["kind"] == "phone_status" and (not statuses or statuses[-1] != e.get("status")):
@@ -239,11 +242,16 @@ def _phone_section(events: list[dict]) -> list[str]:
     for e in phone:
         kind = e["kind"]
         if kind in ("phone_stream_end", "phone_app_list", "phone_open_app", "phone_session",
-                    "phone_avoid_bad_wifi"):
+                    "phone_avoid_bad_wifi", "phone_bt_address", "phone_dnd",
+                    "phone_media_key", "phone_status_poll", "phone_status_poll_error",
+                    "phone_wifi_default", "phone_pair", "phone_pairing_not_needed"):
             detail = {k: v for k, v in e.items()
                       if k not in ("t", "wall", "kind", "mono", "seq", "stdout_head")}
             out.append(f"  t={e['t']} {kind} {detail}")
         elif kind == "phone_connectivity":
+            if e.get("wifi_default"):
+                out.append(f"  t={e['t']} !!! the phone's default network is the Pi's Wi-Fi: "
+                           "NO INTERNET (docs/phone-mode.md)")
             out.append(f"  t={e['t']} phone network state:")
             out += [f"      {line}" for line in e.get("lines", [])[:15]]
     return out

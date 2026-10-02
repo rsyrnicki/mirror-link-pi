@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from string import Template
 
-from . import eventing, soap
+from . import btaddr, eventing, soap
 from .config import Config
 from .session import STAGE_UPNP, Session
 from .variants import Variant, VariantManager
@@ -57,6 +57,15 @@ def render_descriptor(cfg: Config, address: str, *, template_path: Path = DEFAUL
             f"<minorVersion>{_xml_escape(minor or '0')}</minorVersion>"
             "</X_mirrorLinkVersion>"
         )
+    if variant.bt_apps:
+        bt = btaddr.current(cfg)
+        if bt:
+            # Part 12 §5: the server has Bluetooth at this address. startConnection
+            # false = the car connects (the Pi can't; the phone is paired with the car).
+            extra += ('<X_connectivity xmlns="urn:schemas-carconnectivity-org:ml-1-0">'
+                      f"<bluetooth><bdAddr>{bt}</bdAddr>"
+                      "<startConnection>false</startConnection></bluetooth>"
+                      "</X_connectivity>")
     # All free-text values must be XML-escaped — manufacturer names and friendly names
     # routinely contain ``&`` which otherwise produces invalid XML.
     return template.substitute(
@@ -109,6 +118,7 @@ class DescriptorServer(ThreadingHTTPServer):
             session=session,
             variant=(lambda: variants.current) if variants else Variant,
             progress=variants.progress if variants else (lambda step: None),
+            bt_address=lambda: btaddr.current(cfg),
         )
         # 128×128 24-bit PNG per Part 9 §4.2.7 ("First icon shall be... width=128,
         # height=128, depth=24").
@@ -293,7 +303,8 @@ class DescriptorHandler(BaseHTTPRequestHandler):
         # lists; the first issuance lists every appID in the current AppList.
         if service_path == "/evt/TmApplicationServer":
             ids = soap.render_app_status_value(
-                soap.advertised_app_ids(self.server.current_variant()))
+                soap.advertised_app_ids(self.server.current_variant(),
+                                        self.server.soap_ctx.bt_address()))
             eventing.fire_event(
                 store, service_path,
                 [("AppListUpdate", ids), ("AppStatusUpdate", ids)],
