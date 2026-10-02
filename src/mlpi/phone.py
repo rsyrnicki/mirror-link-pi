@@ -1369,6 +1369,8 @@ class PhoneLink:
         finally:
             if "status_stop" in locals():
                 status_stop.set()
+            if self.launcher:
+                self.launcher.set_notice("")      # the next connection checks again
             with self._control_lock:
                 self._control = None
             for sock in (video, control):
