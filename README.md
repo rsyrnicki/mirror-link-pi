@@ -177,11 +177,11 @@ More: [`docs/laptop-dev.md`](docs/laptop-dev.md) (development and tests),
 
 | Path | What |
 |---|---|
-| `src/mlpi/` | the server: `dhcp`, `ssdp`, `http_descriptor` + `soap` + `eventing`, `rfb` + `mirrorlink_vnc` + `canvas` + `screen`, `dap`, `variants`, `session`, `capture`, `gadget`, `led`, `runner`; phone mode: `phone` (scrcpy client), `avdecode` (H.264 via libavcodec), `video` (frames + source switch) |
+| `src/mlpi/` | the server: `dhcp`, `ssdp`, `http_descriptor` + `soap` + `eventing`, `rfb` + `mirrorlink_vnc` + `canvas` + `screen`, `dap`, `variants`, `session`, `capture`, `gadget`, `led`, `runner`; phone mode: `phone` (scrcpy client), `avdecode` (H.264 via libavcodec), `video` (frames + source switch), `launcher` + `phonestatus` (home screen, status bar), `pairing` (number pad), `btaddr`; `health` (Pi temperature, power, Wi-Fi link) |
 | `src/mlpi/tools/` | `simulate_car` (recorded VW handshake + VNC client), `car_view` (live window that behaves like the car), `probe_phone` (drive a real phone), `phone_tools` (`pair-phone`, `phone-preview`), `report`, `discover` |
 | `config/` | device descriptor template, SCPDs, `variants.toml`, `mlpi.toml.example` |
 | `systemd/` | units started at boot on the Pi |
-| `scripts/` | `prepare-sd.sh`, `collect-logs.sh`, `fetch-spec.sh`, `fetch-scrcpy-server.sh` (laptop); `probe-sai-*` (VW SAI research) |
+| `scripts/` | laptop: `install-sd.sh` (download + write + set up), `prepare-sd.sh`, `make-data-partition.sh`, `update-pi.sh`, `collect-logs.sh`, `fetch-spec.sh`, `fetch-scrcpy-server.sh`, `scrub-captures.py`; on the Pi: `apply-update.sh`; `probe-sai-*` (VW SAI research) |
 | `captures/` | car captures from earlier sessions (vehicle identifiers scrubbed) |
 | `legacy/` | Robert's original files, kept for git-blame lineage |
 

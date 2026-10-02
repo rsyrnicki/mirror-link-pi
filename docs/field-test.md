@@ -60,10 +60,14 @@ directory, and the car's "fresh plug-in" behaviour gets recorded too.
 
 ## Back home
 
+Plug the Pi into the laptop's USB port, wait for 2 LED blinks, then:
+
 ```bash
-sudo ./scripts/collect-logs.sh /dev/sdX
+./scripts/collect-logs.sh --pi                 # card stays in the Pi
 less car-logs/<timestamp>/REPORT.txt
 ```
+
+(Card in the laptop instead: `sudo ./scripts/collect-logs.sh /dev/sdX`.)
 
 `REPORT.txt` has, per session: the furthest stage, a table of every attempt (variant
 and the requests the car made), per-variant success counts, the car's DHCP fingerprint,

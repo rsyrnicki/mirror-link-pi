@@ -84,7 +84,9 @@ The sequence:
 2. The car requests the screen; the Pi sends the full image and from then on only the
    regions that change (**updates**).
 3. A touch on the car screen arrives at the Pi as a **pointer event** (position plus
-   pressed/released); the rotary knob and hardware keys arrive as **key events**.
+   pressed/released); keys arrive as **key events**. Which keys a head unit sends is
+   its choice: the MIB2 Standard sends only the text from its on-screen keyboard, no
+   knob or hardware keys.
 
 MirrorLink adds its own messages on top of VNC:
 - **Context information:** the Pi tells the car what kind of content is shown (e.g. a
@@ -106,8 +108,8 @@ The Pi does not run Maps itself; it mirrors the phone.
    phone joins. The hotspot offers no internet, so the phone keeps using **mobile data**.
 2. **adb** (Android Debug Bridge): Android's developer interface for controlling a phone
    from a computer. **Wireless debugging** is adb over Wi-Fi. The phone only accepts the
-   Pi because it was **paired** once (`mlpi pair-phone`): the Pi holds a key the phone
-   trusts.
+   Pi because it was **paired** once (with a code typed on the car screen, or
+   `mlpi pair-phone` on the laptop): the Pi holds a key the phone trusts.
 3. **scrcpy** ("screen copy"): an open-source tool. Through adb, the Pi starts its small
    server program on the phone, which
    - creates a **virtual display**, an additional 800×480 screen inside the phone where
@@ -138,7 +140,7 @@ Maps, Spotify            USB gadget (NCM)  ◀─────USB─────�
   800×480 display        SSDP: "MirrorLink server here"        searches the network
 scrcpy: H.264 ──Wi-Fi──▶ HTTP/SOAP: descriptor, app list ◀─▶  reads, launches the app
        ◀── touches ───── decode → RGB565 → VNC  ◀────────▶    displays, sends
-                                                               touches and knob input
+                                                               touches and keyboard text
 Audio ───────────────────── Bluetooth ───────────────────▶    speakers
 ```
 

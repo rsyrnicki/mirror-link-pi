@@ -14,8 +14,8 @@ Phone ──Wi-Fi (Pi hotspot)── H.264 video / touch ── Pi ──USB Mir
   the phone keeps using mobile data for Maps and Spotify.
 - **Audio** is not part of this. Pair the phone with the car over Bluetooth as usual; music
   and navigation voice go that way.
-- **While driving** the car blanks uncertified MirrorLink content (see the README). That
-  needs the head unit's own setting.
+- **While driving** the car blanks uncertified MirrorLink content (see the README): use
+  it while parked.
 
 **Tested** with a Samsung Galaxy A56 (Android 16, One UI) and a VW Polo's MIB2 Standard
 head unit: Google Maps, HERE WeGo, Spotify, Audible and Home Assistant, at 20 fps with
@@ -41,6 +41,12 @@ git pull
    debugging. Turn it off if pairing or connecting fails.
 4. Recommended: add the **Wireless debugging** tile to the quick settings panel (Developer
    options → Quick settings developer tiles), so switching it on takes one tap.
+5. Join the Wi-Fi **MirrorLink-Pi** once the card is ready (password printed by
+   `install-sd.sh`, also in `mlpi.toml` on the card's boot partition). When the phone
+   says *"Internet may not be available"*, **don't answer**: go to the home screen (see
+   [No internet](#if-it-lags-freezes-or-has-no-internet)). Recommended: in that network's
+   settings (⚙ → View more → MAC address type), choose **Phone MAC**, so the phone keeps
+   the same address on the Pi's Wi-Fi.
 
 ### Pair the phone with the Pi's key
 
@@ -56,10 +62,8 @@ Tip: Android revokes debugging authorisations that haven't been used for 7 days.
 that off in *Developer options → Disable adb authorization timeout*, or the phone may
 forget the Pi between drives.
 
-**From the laptop** (alternative, before preparing the card):
-
-The phone only accepts adb connections from keys it has been paired with. The Pi can't
-show you a pairing screen, so the laptop pairs **the Pi's key** once:
+**From the laptop** (alternative, before preparing the card): the laptop pairs **the
+Pi's key** once:
 
 ```bash
 PYTHONPATH=src python3 -m mlpi pair-phone
@@ -74,16 +78,15 @@ controlling your phone while Wireless debugging is on.
 
 ### Prepare the SD card with phone mode
 
-```bash
-sudo ./scripts/prepare-sd.sh --phone /dev/sdX
-```
-
-On top of the normal install, this:
+`sudo ./scripts/install-sd.sh /dev/sdX` (README quick start) includes phone mode. On a
+card that already has Raspberry Pi OS, `sudo ./scripts/prepare-sd.sh --phone /dev/sdX`
+does the same part. On top of the normal install, this:
 
 - installs `adb` and FFmpeg's decoder libraries into the image (about 100 MB, via qemu;
   takes about 3 minutes)
 - installs the scrcpy server, version 4.1, checksum-pinned (`scripts/fetch-scrcpy-server.sh`)
-- copies the paired adb key
+- copies the laptop's adb key (`~/.config/mlpi/adb/`, created if missing), which the
+  phone then trusts after pairing
 - turns phone mode on in `mlpi.toml` on the boot partition, with a **random Wi-Fi
   password**, which is printed at the end
 
@@ -161,8 +164,11 @@ can't be used there. So the Pi draws its own home screen for the car:
   battery, tap to light it up, e.g. to see a notification).
 - **All apps:** every launchable app on the phone, 12 per page, alphabetical. The list
   comes from the phone itself when it connects.
-- **Home button:** a small house in the middle of the right edge, over every app, brings
-  the tiles back (`home_button` moves it, see the settings).
+- **Back and Home buttons:** in the middle of the right edge, over every app. Back
+  (arrow) is Android's Back; Home (house) brings the tiles back. `home_button` moves
+  them, `back_button = false` leaves out Back (see the settings).
+- **Warning line** at the bottom, red: the phone uses the Pi's Wi-Fi as its internet
+  connection, so apps have no internet (see [No internet](#if-it-lags-freezes-or-has-no-internet)).
 
 Tiles show the app's name and initial rather than its real icon (scrcpy has no way to
 send icons). Names are drawn with the Pi's pixel font: letters are converted, e.g. Ä → AE.
@@ -174,7 +180,7 @@ send icons). Names are drawn with the Pi's pixel font: letters are converted, e.
 | `waiting for the phone on Wi-Fi` | The phone isn't on MirrorLink-Pi. |
 | `phone on Wi-Fi, but wireless debugging is off` | Switch Wireless debugging on. (With the phone's screen off, Android ignores the usual network announcement, so the Pi also scans for the debugging port, at most every 30 s, and remembers it for next time.) |
 | `phone refused adb: pair it` | Pair on the car screen (see *Pair the phone with the Pi's key*). |
-| `phone doesn't know this Pi: pair it on the car screen` | The number pad is up: open *Pair device with pairing code* on the phone and type the code. |
+| `phone doesn't know this Pi: pair it on the car screen` | The number pad is up. Its message says why: *NOT FOUND: IS WIRELESS DEBUGGING ON?* (switch it on; the phone then usually connects by itself) or *THE PHONE DOESN'T KNOW THIS PI* (open *Pair device with pairing code* on the phone and type the code). |
 | `starting scrcpy on …` | Connected; starting the stream. |
 | `streaming … 800x480` | Working. |
 | `phone lost: …` | The reason is in the session log. The Pi retries every few seconds. |
@@ -207,8 +213,8 @@ If you already chose **Always connect** (tested on a Galaxy A56, One UI):
 If that doesn't help: Wi-Fi → `MirrorLink-Pi` → ⚙ → **Forget**, join again, and leave
 the prompt unanswered.
 
-Collect the logs (`./scripts/collect-logs.sh --pi`, or `sudo ./scripts/collect-logs.sh
-/dev/sdX` with the card in the laptop) and look at the **Phone:**
+Collect the logs (`./scripts/collect-logs.sh --pi` with the Pi on the laptop's USB
+port, or `sudo ./scripts/collect-logs.sh /dev/sdX` with the card in the laptop) and look at the **Phone:**
 and **Pi health:** sections of the session's `REPORT.txt`:
 
 | Report line | Healthy | If not |
@@ -216,7 +222,7 @@ and **Pi health:** sections of the session's `REPORT.txt`:
 | `decoded fps` | close to `max_fps` | lower `max_fps` / `bit_rate` |
 | `delay behind the phone per 5 s` | median under ~0.7 s | high with high Pi load: lower `max_fps`; with low load: Wi-Fi (next line) |
 | `phone Wi-Fi link` | signal better than about −65 dBm, few failures | move the Pi/phone, or try another `wifi_channel` (1, 6 or 11) |
-| `phone network state` → `Active default network` | the mobile network (not WIFI) | don't choose "stay connected" on the no-internet prompt; keep `avoid_bad_wifi = true` |
+| `phone network state` → `Active default network` | the mobile network (not WIFI); no `!!! ... NO INTERNET` line | see *No internet* above; keep `avoid_bad_wifi = true` |
 | `power/thermal flags seen` | `none` | the car's USB port can't supply enough: use a better cable or a 2.4 A socket |
 
 A desktop VNC viewer (Remmina, TigerVNC) is no good for judging speed: it asks for a
@@ -235,7 +241,7 @@ colour format the Pi has to convert in Python. Use `mlpi car-view` (desk test 2)
 | `max_lag` | `2.0` | seconds the picture may fall behind the phone before the Pi drops the backlog and asks for a fresh keyframe (0 = never) |
 | `avoid_bad_wifi` | `true` | sets Android's "avoid bad Wi-Fi" (`network_avoid_bad_wifi=1`) on the phone so mobile data stays its internet while it is on the Pi's Wi-Fi; undo with `adb shell settings delete global network_avoid_bad_wifi` |
 | `bt_address` | `""` | the phone's Bluetooth address for `s6-audio-home-bt` (`""` = read it from the phone) |
-| `knob_invert` | `false` | the car's knob scrolls the other way inside apps |
+| `knob_invert` | `false` | the car's knob scrolls the other way inside apps (head units that send knob events; not the MIB2 Standard) |
 | `home_button` | `"right"` | where the Pi's Home button sits on the phone video: `right` / `left` (middle of that edge), `top-left`, `top-right`, `bottom-left`, `bottom-right`, or `off` |
 | `back_button` | `true` | a Back button above the Home button (head units like the MIB2 Standard send no Back key to MirrorLink) |
 | `system_decorations` | `false` | Samsung's secondary-display launcher + navigation bar on the virtual display |
