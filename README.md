@@ -4,6 +4,10 @@ Your Android phone's apps on a MirrorLink car screen. A Raspberry Pi Zero 2 W pl
 into the car's USB socket presents itself as a MirrorLink phone; the head unit shows
 Google Maps, Spotify or any other app from your phone, and you control them by touch.
 
+![Google Maps from an Android phone on a VW Polo's MIB2 head unit, through MirrorLink-Pi](docs/img/car-phone-maps.jpg)
+
+*Google Maps navigation from the phone on the car's screen (street names blurred).*
+
 **Status: works in daily use** with a VW Polo's MIB2 Standard head unit (`VW-Mibstd2`)
 and a Samsung Galaxy A56 (Android 16). Other MirrorLink head units and Android phones
 are untested so far; see [`docs/compatibility.md`](docs/compatibility.md) and please
