@@ -107,10 +107,9 @@ size.
 **2. Phone → Pi → laptop.** This is the real chain:
 
 1. Plug the Pi into the laptop as for the normal pre-flight.
-2. On the phone, join the Wi-Fi **MirrorLink-Pi** (password from `mlpi.toml`). When Android
-   says the network has no internet, just ignore it. Don't choose **stay connected** /
-   "don't ask again": that makes the Pi's Wi-Fi (which has no internet) the phone's
-   internet connection.
+2. On the phone, join the Wi-Fi **MirrorLink-Pi** (password from `mlpi.toml`). When
+   the phone says the network has no internet, **answer nothing**: go to the home screen
+   (see [No internet](#if-it-lags-freezes-or-has-no-internet) for why).
 3. Switch Wireless debugging on.
 4. Open the car's view in a window, over the USB link:
    ```bash
@@ -132,7 +131,8 @@ size.
    30 s the head unit lists **MirrorLink Pi** among the MirrorLink apps; open it. The car
    shows the Pi's status screen.
 2. The first time, join the Wi-Fi **MirrorLink-Pi** on the phone (password from
-   `mlpi.toml`; ignore the "no internet" prompt). After that the phone joins by itself.
+   `mlpi.toml`; leave the "no internet" prompt unanswered by going to the home screen).
+   After that the phone joins by itself.
 3. Switch Wireless debugging on (quick settings tile) if it's off.
 4. Within a few seconds the car shows the Pi's launcher; tap an app. With the phone
    disconnected, the car shows the Pi's status screen again; the Pi reconnects by
@@ -187,16 +187,25 @@ network state (`phone-connectivity.txt`).
 ## If it lags, freezes or has no internet
 
 **No internet, and the car shows "No internet: phone uses the Pi's Wi-Fi":** the phone
-has been told to stay connected to `MirrorLink-Pi` even though it has no internet, so
-it sends all traffic there. "Avoid bad Wi-Fi" doesn't override that choice. To undo it:
+has been told to use `MirrorLink-Pi` even though it has no internet, so it sends all
+traffic there. "Avoid bad Wi-Fi" doesn't override that choice.
 
-1. On the phone: Settings → Connections → Wi-Fi → `MirrorLink-Pi` → ⚙ → **Forget**.
-2. Join `MirrorLink-Pi` again with its password.
-3. When the phone says the network has no internet, **ignore the message**: don't tap
-   it and don't choose "stay connected" / "keep Wi-Fi connection".
-4. Optional, so the phone doesn't reset the setting: Settings → Connections → Wi-Fi →
-   ⋮ → Intelligent Wi-Fi → **Switch to mobile data** on (Samsung; on other phones
-   Developer options → "Mobile data always active" plus "Switch to mobile data").
+When you join the Pi's Wi-Fi, Samsung phones ask *"Internet may not be available"* with
+**Connect only this time / Always connect / Disconnect**. Every answer is wrong for
+MirrorLink-Pi: the two connect options make it the phone's internet connection, and
+Disconnect leaves it. Don't answer; go to the home screen. The phone stays connected
+and keeps mobile data for the internet. (Stock Android asks "Stay connected?"; the
+same applies.)
+
+If you already chose **Always connect** (tested on a Galaxy A56, One UI):
+
+1. Settings → Connections → Wi-Fi → ⋮ → Intelligent Wi-Fi → Switch to mobile data →
+   **Network exceptions** → remove `MirrorLink-Pi`.
+2. Leave **Switch to mobile data** on.
+3. Reconnect to `MirrorLink-Pi`; if the prompt appears, go to the home screen again.
+
+If that doesn't help: Wi-Fi → `MirrorLink-Pi` → ⚙ → **Forget**, join again, and leave
+the prompt unanswered.
 
 Collect the logs (`./scripts/collect-logs.sh --pi`, or `sudo ./scripts/collect-logs.sh
 /dev/sdX` with the card in the laptop) and look at the **Phone:**
