@@ -172,3 +172,53 @@ def test_hints_never_replace_a_pairing_result():
     link.pairing.set_message("PAIRING FAILED: CHECK CODE AND PORT")
     link._show_pairing("192.168.8.44", ph.NOT_FOUND_HINT)
     assert link.pairing.message.startswith("PAIRING FAILED")
+
+
+def test_debugging_port_refused_before_pairing_is_tried_again_after_it(monkeypatch):
+    """Before pairing the phone's real debugging port refuses the Pi (and so lands on
+    the skip list); after pairing it must be tried again at once."""
+    accepted = set()
+
+    class FakeAdb:
+        def devices(self):
+            return []
+
+        def connect(self, target):
+            return target in accepted
+
+        def state(self, target):
+            return "device"
+
+        def pair(self, target, code):
+            accepted.add("192.168.8.44:38959")      # the phone now knows this Pi's key
+            return True, "Successfully paired"
+
+        def run(self, *args, serial="", timeout=20.0):
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ph, "discover_adb_tls", lambda *a, **k: [])
+    monkeypatch.setattr(ph, "scan_open_ports", lambda ip, a, b: [38959])
+    switch = DisplaySwitch(Canvas(800, 480))
+    cfg = types.SimpleNamespace(adb="adb", adb_home="", interface="wlan0", launcher=False,
+                                legacy_port=0)
+    link = ph.PhoneLink(cfg, switch.new_video_frame(), switch, adb=FakeAdb(),
+                        candidates=lambda: ["192.168.8.44"])
+    monkeypatch.setattr(link._stop, "wait", lambda t: False)
+    for _ in range(3):                                # refused: skipped after two tries
+        link._last_scan = float("-inf")
+        assert link._find_device() == ""
+    assert link._skip_port("192.168.8.44:38959")
+    link._pair("192.168.8.44", "37001", "123456")
+    assert link._find_device() == "192.168.8.44:38959"
+
+
+def test_skipped_port_expires(monkeypatch):
+    link = ph.PhoneLink(types.SimpleNamespace(adb="adb", adb_home=""),
+                        types.SimpleNamespace(width=800, height=480), switch=None)
+    now = [1000.0]
+    monkeypatch.setattr(ph.time, "monotonic", lambda: now[0])
+    link._port_failed("ip:1")
+    link._port_failed("ip:1")
+    assert link._skip_port("ip:1")
+    now[0] += ph.PORT_SKIP_SECONDS + 1
+    assert not link._skip_port("ip:1")

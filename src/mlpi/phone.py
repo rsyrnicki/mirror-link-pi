@@ -79,6 +79,7 @@ STATUS_POLL_SECONDS = 30
 CONNECTIVITY_RECHECK_SECONDS = 120
 SCAN_INTERVAL = 15               # s between port scans while the phone isn't found
 PORT_FAILS_IGNORE = 2            # failed adb connects before a scanned port is skipped
+PORT_SKIP_SECONDS = 300          # … for this long (a refused port may work after pairing)
 OFFLINE_RESTART_AFTER = 6       # adb connects stuck "offline" before restarting adb
 NOT_FOUND_HINT = "NOT FOUND: IS WIRELESS DEBUGGING ON?"
 REFUSED_HINT = "THE PHONE DOESN'T KNOW THIS PI: PAIR IT"
@@ -675,7 +676,8 @@ class PhoneLink:
         self._serial = ""
         self._last_scan = float("-inf")
         self._offline_count = 0                   # connects that ended "offline"
-        self._failed_ports: dict[str, int] = {}   # "ip:port" → failed adb connects
+        # "ip:port" → (failed adb connects, monotonic time of the last failure)
+        self._failed_ports: dict[str, tuple[int, float]] = {}
 
     # ----- helpers -----
 
@@ -1052,8 +1054,7 @@ class PhoneLink:
                 ports = scan_open_ports(ip, *ADB_PORT_RANGE)
                 # Ports that already failed twice belong to something else on the
                 # phone (one stays open on the A56 all the time): don't retry them.
-                ports = [p for p in ports
-                         if self._failed_ports.get(f"{ip}:{p}", 0) < PORT_FAILS_IGNORE]
+                ports = [p for p in ports if not self._skip_port(f"{ip}:{p}")]
                 self._event("phone_port_scan", ip=ip, open=ports[:10],
                             seconds=round(time.monotonic() - t0, 1))
                 found = self._try_targets([f"{ip}:{p}" for p in ports[:10]])
@@ -1161,6 +1162,7 @@ class PhoneLink:
         self._event("phone_pair", target=f"{ip}:{port}", ok=ok, output=text[:300])
         if ok:
             self.pairing.set_message("PAIRED. CONNECTING ...", GOOD)
+            self._failed_ports.clear()            # the port that refused us accepts now
             self._unreachable_since = None
             self._last_scan = float("-inf")
             self._stop.wait(1.5)
@@ -1174,10 +1176,21 @@ class PhoneLink:
             self.pairing.field = "code"
             self.pairing.set_message("PAIRING FAILED: CHECK CODE AND PORT", BAD)
 
+    def _port_failed(self, target: str) -> None:
+        count, _t = self._failed_ports.get(target, (0, 0.0))
+        self._failed_ports[target] = (count + 1, time.monotonic())
+
+    def _skip_port(self, target: str) -> bool:
+        """A scanned port that failed twice in the last few minutes (the A56 keeps an
+        unrelated one open all the time). Entries expire, and pairing clears them: the
+        phone's real debugging port also fails while the phone doesn't know this Pi."""
+        count, last = self._failed_ports.get(target, (0, 0.0))
+        return count >= PORT_FAILS_IGNORE and time.monotonic() - last < PORT_SKIP_SECONDS
+
     def _try_targets(self, targets: list[str]) -> str:
         for target in dict.fromkeys(targets):            # unique, in order
             if not self.adb.connect(target):
-                self._failed_ports[target] = self._failed_ports.get(target, 0) + 1
+                self._port_failed(target)
                 continue
             state = self.adb.state(target)
             self._event("phone_adb_connect", target=target, state=state)
@@ -1185,7 +1198,7 @@ class PhoneLink:
                 self._remember_port(target)
                 self._unreachable_since = None
                 return target
-            self._failed_ports[target] = self._failed_ports.get(target, 0) + 1
+            self._port_failed(target)
             if state == "unauthorized":
                 self._set_status("phone refused adb: pair it (docs/phone-mode.md)")
             # Otherwise adb keeps the entry, answers "already connected" next time and
