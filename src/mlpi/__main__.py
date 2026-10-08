@@ -111,6 +111,16 @@ def main(argv: list[str] | None = None) -> int:
         from . import session
         directory = session.init_session(Path(cfg.session.root))
         print(directory)
+        if session.data_partition_missing(Path(cfg.session.root)):
+            # The recordings go to the root fs this time: say so where it is seen
+            # (journal, the session directory, collect-logs.sh).
+            print("WARNING: the mlpi-data partition is not mounted; this session is "
+                  "on the root file system", file=sys.stderr)
+            try:
+                (directory / "DATA-PARTITION-MISSING").write_text(
+                    "/var/lib/mlpi was not mounted when this session started\n")
+            except OSError:
+                pass
         return 0
 
     if args.cmd == "gadget-up":

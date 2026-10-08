@@ -140,6 +140,18 @@ With the card in the laptop:
 sudo ./scripts/collect-logs.sh /dev/sdX          # → ./car-logs/<timestamp>/REPORT.txt
 ```
 
+Both also collect two things that only show up when something went wrong:
+
+- **`mlpi-boot-problem.txt`:** if MirrorLink-Pi isn't running 2 minutes after
+  power-on (the car then sees no MirrorLink device, the LED stays solid), the Pi
+  writes the reason to this file on the boot partition (`bootfs`). It's plain text,
+  readable on any computer. The system journal is kept in RAM, so this file is the
+  only trace such a start leaves.
+- **`zips/rootfs-session-NNNN.zip`:** sessions recorded while the data partition
+  wasn't mounted (they land on the root file system instead).
+
+If the Pi isn't reachable over USB, use the card in the laptop.
+
 ## Protecting the card against power cuts
 
 The car cuts the Pi's power without warning. Anything being written at that moment

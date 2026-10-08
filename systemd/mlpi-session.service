@@ -1,13 +1,22 @@
 [Unit]
 Description=MirrorLink-Pi: create this boot's session directory
 DefaultDependencies=no
-After=local-fs.target
+# The data partition (prepare-sd.sh --data-partition) is mounted "nofail", so
+# local-fs.target doesn't wait for it: order on the mount itself, or this boot's
+# session lands on the root fs, hidden once the partition is mounted over it. If the
+# partition is missing or broken, the mount fails after its 10 s timeout and the
+# session still starts (on the root fs, see `data_partition_missing`).
+After=local-fs.target var-lib-mlpi.mount
 Before=mlpi-gadget.service mlpi-capture.service mlpi-journal.service mlpi.service
 PartOf=mlpi.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# A oneshot waits forever by default, and the USB gadget and mlpi.service are ordered
+# after it: if this ever hangs, they start anyway after 30 s (mlpi falls back to the
+# session root).
+TimeoutStartSec=30
 Environment=PYTHONPATH=/opt/mlpi/src
 WorkingDirectory=/opt/mlpi
 ExecStart=/usr/bin/python3 -m mlpi session-init

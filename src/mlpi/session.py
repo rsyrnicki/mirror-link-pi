@@ -61,6 +61,18 @@ def _now_wall() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
+def data_partition_missing(root: Path, fstab: Path = Path("/etc/fstab")) -> bool:
+    """True if fstab mounts a partition at `root` (cards made with --data-partition)
+    but it isn't mounted right now."""
+    try:
+        lines = fstab.read_text().splitlines()
+    except OSError:
+        return False
+    wanted = any(len(f) > 1 and f[1] == str(root)
+                 for f in (line.split() for line in lines if not line.lstrip().startswith("#")))
+    return wanted and not os.path.ismount(root)
+
+
 def init_session(root: Path, *, pointer: Path = RUN_POINTER) -> Path:
     """Create the directory for this boot and publish it via ``pointer``.
 

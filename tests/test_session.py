@@ -67,3 +67,15 @@ def test_station_dump_parsing():
     assert st["mac"] == "aa:8b:f6:42:18:cb"
     assert st["signal"] == "-48 [-48] dBm" and st["tx_failed"] == "3"
     assert st["tx_bitrate"] == "65.0 MBit/s MCS" and st["inactive"] == "120 ms"
+
+
+def test_data_partition_missing_is_noticed(tmp_path):
+    from mlpi.session import data_partition_missing
+    root = tmp_path / "mlpi"
+    root.mkdir()
+    fstab = tmp_path / "fstab"
+    fstab.write_text(f"LABEL=mlpi-data  {root}  ext4  defaults,nofail  0  2\n")
+    assert data_partition_missing(root, fstab)               # listed but not mounted
+    fstab.write_text(f"# LABEL=mlpi-data  {root}  ext4\n")
+    assert not data_partition_missing(root, fstab)           # card without one
+    assert not data_partition_missing(root, tmp_path / "no-fstab")

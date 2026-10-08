@@ -181,7 +181,7 @@ More: [`docs/laptop-dev.md`](docs/laptop-dev.md) (development and tests),
 | `src/mlpi/tools/` | `simulate_car` (recorded VW handshake + VNC client), `car_view` (live window that behaves like the car), `probe_phone` (drive a real phone), `phone_tools` (`pair-phone`, `phone-preview`), `report`, `discover` |
 | `config/` | device descriptor template, SCPDs, `variants.toml`, `mlpi.toml.example` |
 | `systemd/` | units started at boot on the Pi |
-| `scripts/` | laptop: `install-sd.sh` (download + write + set up), `prepare-sd.sh`, `make-data-partition.sh`, `update-pi.sh`, `collect-logs.sh`, `fetch-spec.sh`, `fetch-scrcpy-server.sh`, `scrub-captures.py`; on the Pi: `apply-update.sh`; `probe-sai-*` (VW SAI research) |
+| `scripts/` | laptop: `install-sd.sh` (download + write + set up), `prepare-sd.sh`, `make-data-partition.sh`, `update-pi.sh`, `collect-logs.sh`, `fetch-spec.sh`, `fetch-scrcpy-server.sh`, `scrub-captures.py`; on the Pi: `apply-update.sh`, `boot-check.sh`; `probe-sai-*` (VW SAI research) |
 | `captures/` | car captures from earlier sessions (vehicle identifiers scrubbed) |
 | `legacy/` | Robert's original files, kept for git-blame lineage |
 

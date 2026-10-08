@@ -26,6 +26,8 @@ rm -rf "$OPT.old" "$SRC"
 
 echo "==> systemd units"
 install -m 0644 "$OPT"/systemd/*.service "$OPT"/systemd/mlpi.target "$SYSD/"
+install -d "$SYSD/sysinit.target.wants"
+ln -sfn "$SYSD/mlpi-bootcheck.service" "$SYSD/sysinit.target.wants/mlpi-bootcheck.service"
 $SYSTEMCTL daemon-reload
 
 # What prepare-sd.sh --phone installs; it can't be installed from here (no internet).

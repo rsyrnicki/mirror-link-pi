@@ -27,6 +27,7 @@ ROOT=""
 DEST=""
 MNT=""
 PI=""
+EXTRA_MNTS=()
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -48,6 +49,10 @@ if [[ -z "$PI" ]]; then
 fi
 
 cleanup() {
+    for m in "${EXTRA_MNTS[@]}"; do
+        umount "$m" 2>/dev/null || true
+        rmdir "$m" 2>/dev/null || true
+    done
     if [[ -n "$PI" && -n "$MNT" ]]; then
         rm -rf "$MNT"
     elif [[ -n "$MNT" ]]; then
@@ -83,11 +88,18 @@ if [[ -n "$PI" ]]; then
     [[ -f "$KEY" ]] || die "no SSH key at $KEY: the card needs prepare-sd.sh --ssh (install-sd.sh does it)"
     MNT="$(mktemp -d /tmp/mlpi-logs.XXXX)"
     echo "==> copying the sessions from $PI"
-    ssh -i "$KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
-        -o UserKnownHostsFile="$HOME/.config/mlpi/ssh/known_hosts" -o ConnectTimeout=10 \
-        "$PI" 'sudo tar -C /var/lib/mlpi -cf - --ignore-failed-read sessions boot-count winner-variant 2>/dev/null' \
+    SSH=(ssh -i "$KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new
+         -o UserKnownHostsFile="$HOME/.config/mlpi/ssh/known_hosts" -o ConnectTimeout=10 "$PI")
+    "${SSH[@]}" 'sudo tar -C /var/lib/mlpi -cf - --ignore-failed-read sessions boot-count winner-variant 2>/dev/null' \
         | tar -C "$MNT" -xf - \
         || die "couldn't copy from $PI (Pi plugged into the laptop? LED blinking twice?)"
+    # Sessions that ended up on the root fs (data partition not mounted at the time)
+    # sit under the mount point: reach them through a bind mount of /.
+    mkdir -p "$MNT/.rootfs-sessions"
+    "${SSH[@]}" 'mountpoint -q /var/lib/mlpi && sudo sh -c '"'"'d=$(mktemp -d) && mount --bind / "$d" && tar -C "$d/var/lib/mlpi" -cf - sessions 2>/dev/null; umount "$d"; rmdir "$d"'"'"'' \
+        2>/dev/null | tar -C "$MNT/.rootfs-sessions" -xf - 2>/dev/null || true
+    "${SSH[@]}" 'cat /boot/firmware/mlpi-boot-problem.txt 2>/dev/null' \
+        > "$MNT/.mlpi-boot-problem.txt" 2>/dev/null || true
     SRC="$MNT"
     ROOT="$MNT"
 else
@@ -103,6 +115,42 @@ mkdir -p "$DEST"
 cp -a "$SRC/sessions" "$DEST/"
 rm -f "$DEST/sessions/current"
 cp -a "$SRC/boot-count" "$SRC/winner-variant" "$DEST/" 2>/dev/null || true
+
+# Card with a data partition: also the root fs (sessions written while the data
+# partition wasn't mounted) and the boot partition (mlpi-boot-problem.txt).
+MOUNTED=""
+mount_ro() {   # mount_ro PARTITION → sets MOUNTED to where it is mounted ("" = failed)
+    MOUNTED="$(lsblk -lno MOUNTPOINT "$1" | head -1)"
+    [[ -n "$MOUNTED" ]] && return
+    local m; m="$(mktemp -d /tmp/mlpi-part.XXXX)"
+    if mount -o ro "$1" "$m"; then EXTRA_MNTS+=("$m"); MOUNTED="$m"; else rmdir "$m"; fi
+}
+if [[ -n "$DEV" ]] && (( ${DATA_LAYOUT:-0} )); then
+    rootpart="$(lsblk -lnpo NAME,FSTYPE,LABEL "$DEV" | awk '$2=="ext4" && $3!="mlpi-data"{print $1; exit}')"
+    bootpart="$(lsblk -lnpo NAME,FSTYPE "$DEV" | awk '$2=="vfat"{print $1; exit}')"
+    if [[ -n "$rootpart" ]]; then
+        mount_ro "$rootpart"
+        if [[ -n "$MOUNTED" && -d "$MOUNTED/var/lib/mlpi/sessions" ]]; then
+            mkdir -p "$DEST/rootfs-sessions"
+            cp -a "$MOUNTED/var/lib/mlpi/sessions/." "$DEST/rootfs-sessions/"
+        fi
+    fi
+    if [[ -n "$bootpart" ]]; then
+        mount_ro "$bootpart"
+        if [[ -n "$MOUNTED" && -f "$MOUNTED/mlpi-boot-problem.txt" ]]; then
+            cp "$MOUNTED/mlpi-boot-problem.txt" "$DEST/"
+        fi
+    fi
+fi
+if [[ -n "$PI" ]]; then
+    if compgen -G "$MNT/.rootfs-sessions/sessions/[0-9]*" >/dev/null; then
+        mkdir -p "$DEST/rootfs-sessions" && cp -a "$MNT/.rootfs-sessions/sessions/." "$DEST/rootfs-sessions/"
+    fi
+    if [[ -s "$MNT/.mlpi-boot-problem.txt" ]]; then
+        cp "$MNT/.mlpi-boot-problem.txt" "$DEST/mlpi-boot-problem.txt"
+    fi
+fi
+rm -f "$DEST/rootfs-sessions/current"
 if [[ -d "$ROOT/var/log/journal" ]]; then
     cp -a "$ROOT/var/log/journal" "$DEST/journal"
 fi
@@ -118,10 +166,14 @@ from pathlib import Path
 dest, src = Path(sys.argv[1]), sys.argv[2]
 LIMIT = 20_000_000                      # bytes per file in the upload zips
 sessions = sorted(p for p in (dest / "sessions").iterdir() if p.is_dir() and p.name.isdigit())
-for s in sessions:
+rootfs = dest / "rootfs-sessions"     # written while the data partition wasn't mounted
+extra = sorted(p for p in rootfs.iterdir() if p.is_dir() and p.name.isdigit()) \
+    if rootfs.is_dir() else []
+for s in sessions + extra:
     report = subprocess.run([sys.executable, "-m", "mlpi", "report", str(s)], capture_output=True,
                             text=True, env={"PYTHONPATH": src}).stdout
-    out = dest / "zips" / f"session-{s.name}.zip"
+    prefix = "rootfs-session" if s.parent == rootfs else "session"
+    out = dest / "zips" / f"{prefix}-{s.name}.zip"
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         z.writestr(f"{s.name}/REPORT.txt", report)
         skipped = []
@@ -148,3 +200,11 @@ fi
 echo "copied $(ls "$DEST/sessions" | wc -l) session(s) to $DEST"
 echo "summary: $DEST/REPORT.txt"
 echo "to send one session: $DEST/zips/latest.zip (or zips/session-NNNN.zip)"
+if [[ -d "$DEST/rootfs-sessions" ]]; then
+    echo "NOTE: $(ls "$DEST/rootfs-sessions" | wc -l) session(s) were written while the data partition"
+    echo "      wasn't mounted: zips/rootfs-session-NNNN.zip"
+fi
+if [[ -f "$DEST/mlpi-boot-problem.txt" ]]; then
+    echo "NOTE: a start of MirrorLink-Pi failed: $DEST/mlpi-boot-problem.txt"
+    head -1 "$DEST/mlpi-boot-problem.txt"
+fi

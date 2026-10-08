@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Fixed: a startup race put some sessions on the root file system instead of the data
+  partition (the session was created ~2 s before the data partition's file check and
+  mount finished). The session now waits for that mount; if the partition is missing,
+  the session says so (`DATA-PARTITION-MISSING`).
+- If MirrorLink-Pi isn't running 2 minutes after power-on, the Pi writes why to
+  `mlpi-boot-problem.txt` on the boot partition (the journal is in RAM, so such a start
+  left no trace before). A stuck session setup no longer holds back the USB gadget.
+- `collect-logs.sh` also brings home `mlpi-boot-problem.txt` and sessions that landed on
+  the root file system (`zips/rootfs-session-NNNN.zip`).
 - Faster phone discovery after switching on Wireless debugging: the port scan runs
   every 15 s instead of 30 s and with 2000 parallel connects instead of 400 (it took
   ~20 s in the car); ports that fail twice (the A56 keeps one unrelated port open) are

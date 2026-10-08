@@ -194,6 +194,8 @@ done
 install -m 0644 "$REPO"/systemd/*.service "$REPO"/systemd/mlpi.target "$SYSD/"
 install -d "$SYSD/multi-user.target.wants"
 ln -sfn /etc/systemd/system/mlpi.target "$SYSD/multi-user.target.wants/mlpi.target"
+install -d "$SYSD/sysinit.target.wants"
+ln -sfn /etc/systemd/system/mlpi-bootcheck.service "$SYSD/sysinit.target.wants/mlpi-bootcheck.service"
 
 # Pi OS (Trixie) ships rpi-usb-gadget: when turned on (e.g. Imager's "USB gadget mode")
 # it loads g_ether at boot and lets NetworkManager share its connection over usb0.

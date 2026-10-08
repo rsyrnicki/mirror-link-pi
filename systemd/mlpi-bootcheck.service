@@ -1,0 +1,14 @@
+[Unit]
+Description=MirrorLink-Pi: note on the boot partition if it isn't running 2 min after power-on
+# Independent of the other mlpi units and of the normal boot order, so it still runs
+# when something early in the boot is stuck.
+DefaultDependencies=no
+After=boot-firmware.mount
+Wants=boot-firmware.mount
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'sleep 120; exec /opt/mlpi/scripts/boot-check.sh'
+
+[Install]
+WantedBy=sysinit.target
