@@ -23,16 +23,17 @@ rm -rf "$OPT.old"
 [[ -d "$OPT" ]] && mv "$OPT" "$OPT.old"
 mv "$OPT.new" "$OPT"
 rm -rf "$OPT.old" "$SRC"
+sync      # on the card now: a power cut right after an update must not leave empty files
 
 echo "==> systemd units"
 install -m 0644 "$OPT"/systemd/*.service "$OPT"/systemd/mlpi.target "$SYSD/"
 install -d "$SYSD/sysinit.target.wants"
-ln -sfn "$SYSD/mlpi-bootcheck.service" "$SYSD/sysinit.target.wants/mlpi-bootcheck.service"
+ln -sfn /etc/systemd/system/mlpi-bootcheck.service "$SYSD/sysinit.target.wants/mlpi-bootcheck.service"
 $SYSTEMCTL daemon-reload
 
 # What prepare-sd.sh --phone installs; it can't be installed from here (no internet).
 missing=()
-phone="$(awk '/^\[/{s=$0} s=="[phone]" && /^enabled *= *true/{print "on"}' "$TOML" 2>/dev/null)"
+phone="$(awk '/^\[/{s=$0} s=="[phone]" && /^enabled *= *true/{print "on"}' "$TOML" 2>/dev/null || true)"
 if [[ "$phone" == on ]]; then
     for bin in adb iw; do
         command -v "$bin" >/dev/null || missing+=("$bin")
@@ -44,6 +45,7 @@ if (( ${#missing[@]} )); then
     echo "      Run once on the laptop: sudo ./scripts/prepare-sd.sh --phone /dev/sdX"
 fi
 
+sync
 cat "$OPT/VERSION"
 if [[ "$REBOOT" == 1 ]]; then
     echo "==> rebooting (about 30 s)"

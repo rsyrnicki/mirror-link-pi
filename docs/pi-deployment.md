@@ -150,7 +150,9 @@ Both also collect two things that only show up when something went wrong:
 - **`zips/rootfs-session-NNNN.zip`:** sessions recorded while the data partition
   wasn't mounted (they land on the root file system instead).
 
-If the Pi isn't reachable over USB, use the card in the laptop.
+If the Pi isn't reachable over USB, use the card in the laptop. The same goes for
+updates: `sudo ./scripts/update-pi.sh --card /dev/sdX` installs the current code
+straight onto the card (keeps recordings, settings and the scrcpy server).
 
 ## Protecting the card against power cuts
 

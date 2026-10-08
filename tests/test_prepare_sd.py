@@ -297,3 +297,34 @@ def test_wifi_password_can_be_kept(tmp_path):
                          capture_output=True, text=True, timeout=120, env=env)
     assert out.returncode == 0, out.stderr
     assert 'wifi_password = "XVFpq6KCQ5WJ"' in (boot / "mlpi.toml").read_text()
+
+
+def test_update_pi_card_installs_onto_a_card_in_the_laptop(tmp_path):
+    """update-pi.sh --card: the Pi isn't reachable over USB, so update the card directly."""
+    dev = _loop_card(tmp_path)
+    mnt = tmp_path / "m"
+    mnt.mkdir()
+    try:
+        subprocess.run(["mkfs.vfat", "-n", "bootfs", f"{dev}p1"], check=True,
+                       capture_output=True)
+        subprocess.run(["mount", f"{dev}p2", str(mnt)], check=True)
+        (mnt / "opt/mlpi/vendor").mkdir(parents=True)
+        (mnt / "opt/mlpi/vendor/scrcpy-server").write_text("jar")
+        (mnt / "etc/systemd/system").mkdir(parents=True)
+        subprocess.run(["umount", str(mnt)], check=True)
+
+        out = subprocess.run([str(REPO / "scripts" / "update-pi.sh"), "--card", dev],
+                             capture_output=True, text=True)
+        assert out.returncode == 0, out.stdout + out.stderr
+
+        subprocess.run(["mount", f"{dev}p2", str(mnt)], check=True)
+        opt = mnt / "opt/mlpi"
+        assert (opt / "src/mlpi/phone.py").stat().st_size > 0
+        assert (opt / "vendor/scrcpy-server").read_text() == "jar"      # kept
+        assert "(card)" in (opt / "VERSION").read_text()
+        link = mnt / "etc/systemd/system/sysinit.target.wants/mlpi-bootcheck.service"
+        assert os.readlink(link) == "/etc/systemd/system/mlpi-bootcheck.service"
+        assert not (mnt / "opt/mlpi.new").exists() and not (mnt / "opt/mlpi.old").exists()
+    finally:
+        subprocess.run(["umount", str(mnt)], capture_output=True)
+        subprocess.run(["losetup", "-d", dev], capture_output=True)

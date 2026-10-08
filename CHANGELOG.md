@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `update-pi.sh --card /dev/sdX`: update the card in the laptop when the Pi can't be
+  reached over USB. Updates are now flushed to the card before the Pi reboots, so a
+  power cut right after an update can't leave empty files behind.
 - Fixed: a startup race put some sessions on the root file system instead of the data
   partition (the session was created ~2 s before the data partition's file check and
   mount finished). The session now waits for that mount; if the partition is missing,
