@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Faster phone discovery after switching on Wireless debugging: the port scan runs
+  every 15 s instead of 30 s and with 2000 parallel connects instead of 400 (it took
+  ~20 s in the car); ports that fail twice (the A56 keeps one unrelated port open) are
+  no longer retried or taken as "the phone refuses this Pi".
+
 ## 1.1.0 — 2026-10-02
 
 Everyday use in the car: a launcher status bar, pairing on the car screen, Back and

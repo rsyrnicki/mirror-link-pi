@@ -77,6 +77,8 @@ KNOB_CW, KNOB_CCW = 0x3000000E, 0x3000000F          # rotate z clockwise / anti-
 KNOB_DPAD = {KNOB_UP: 19, KNOB_DOWN: 20, KNOB_LEFT: 21, KNOB_RIGHT: 22}   # KEYCODE_DPAD_*
 STATUS_POLL_SECONDS = 30
 CONNECTIVITY_RECHECK_SECONDS = 120
+SCAN_INTERVAL = 15               # s between port scans while the phone isn't found
+PORT_FAILS_IGNORE = 2            # failed adb connects before a scanned port is skipped
 OFFLINE_RESTART_AFTER = 6       # adb connects stuck "offline" before restarting adb
 NOT_FOUND_HINT = "NOT FOUND: IS WIRELESS DEBUGGING ON?"
 REFUSED_HINT = "THE PHONE DOESN'T KNOW THIS PI: PAIR IT"
@@ -377,7 +379,22 @@ def parse_mdns(data: bytes) -> dict:
 ADB_PORT_RANGE = (32768, 60999)
 
 
-def scan_open_ports(ip: str, first: int, last: int, *, concurrency: int = 400,
+def _raise_fd_limit(want: int) -> int:
+    """Raise the soft open-files limit towards `want` (the default 1024 caps a scan's
+    parallel connects); returns the limit now in force."""
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        target = want if hard == resource.RLIM_INFINITY else min(want, hard)
+        if soft != resource.RLIM_INFINITY and soft < target:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+            soft = target
+        return want if soft == resource.RLIM_INFINITY else soft
+    except (ImportError, ValueError, OSError):
+        return 1024
+
+
+def scan_open_ports(ip: str, first: int, last: int, *, concurrency: int = 2000,
                     timeout: float = 0.6, deadline: float = 30.0) -> list[int]:
     """TCP-connect scan of ip:first..last; returns the ports that accepted.
 
@@ -386,6 +403,9 @@ def scan_open_ports(ip: str, first: int, last: int, *, concurrency: int = 400,
     through. Closed ports answer with a reset at once, so ~28 000 ports take a few
     seconds on the hotspot.
     """
+    # The phone's Wi-Fi answers in batches (power saving), ~0.3 s per round trip: with
+    # 400 connects in flight, 28 000 ports took ~20 s in the car; 2000 should need ~5 s.
+    concurrency = max(50, min(concurrency, _raise_fd_limit(concurrency + 256) - 256))
     sel = selectors.DefaultSelector()
     pending: dict[socket.socket, tuple[int, float]] = {}
     found: list[int] = []
@@ -655,6 +675,7 @@ class PhoneLink:
         self._serial = ""
         self._last_scan = float("-inf")
         self._offline_count = 0                   # connects that ended "offline"
+        self._failed_ports: dict[str, int] = {}   # "ip:port" → failed adb connects
 
     # ----- helpers -----
 
@@ -1022,13 +1043,17 @@ class PhoneLink:
                 self._offer_pairing(ip)
                 continue
             # mDNS got no answer (screen off?): look for the port directly, at most
-            # every 30 s so the phone isn't kept busy.
+            # every SCAN_INTERVAL s so the phone isn't kept busy.
             if self._offer_pairing(ip):
                 continue
-            if time.monotonic() - self._last_scan >= 30:
+            if time.monotonic() - self._last_scan >= SCAN_INTERVAL:
                 self._last_scan = time.monotonic()
                 t0 = time.monotonic()
                 ports = scan_open_ports(ip, *ADB_PORT_RANGE)
+                # Ports that already failed twice belong to something else on the
+                # phone (one stays open on the A56 all the time): don't retry them.
+                ports = [p for p in ports
+                         if self._failed_ports.get(f"{ip}:{p}", 0) < PORT_FAILS_IGNORE]
                 self._event("phone_port_scan", ip=ip, open=ports[:10],
                             seconds=round(time.monotonic() - t0, 1))
                 found = self._try_targets([f"{ip}:{p}" for p in ports[:10]])
@@ -1152,6 +1177,7 @@ class PhoneLink:
     def _try_targets(self, targets: list[str]) -> str:
         for target in dict.fromkeys(targets):            # unique, in order
             if not self.adb.connect(target):
+                self._failed_ports[target] = self._failed_ports.get(target, 0) + 1
                 continue
             state = self.adb.state(target)
             self._event("phone_adb_connect", target=target, state=state)
@@ -1159,6 +1185,7 @@ class PhoneLink:
                 self._remember_port(target)
                 self._unreachable_since = None
                 return target
+            self._failed_ports[target] = self._failed_ports.get(target, 0) + 1
             if state == "unauthorized":
                 self._set_status("phone refused adb: pair it (docs/phone-mode.md)")
             # Otherwise adb keeps the entry, answers "already connected" next time and

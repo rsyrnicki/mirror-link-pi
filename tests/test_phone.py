@@ -357,3 +357,27 @@ def test_only_addresses_of_connected_phones_are_tried():
     assert d.connected_addresses(["BB:BB:BB:BB:BB:BB"]) == ["192.168.8.45"]
     assert d.connected_addresses([]) == []
     assert d.connected_addresses(None) == ["192.168.8.45", "192.168.8.44"]
+
+
+def test_scanned_port_that_is_not_adb_is_skipped_after_two_failures(monkeypatch):
+    """The A56 keeps one unrelated port open all the time; it must not cost an adb
+    connect (or trigger "pair it") on every scan."""
+    connects = []
+
+    class FakeAdb:
+        def devices(self):
+            return []
+
+        def connect(self, target):
+            connects.append(target)
+            return False
+
+    monkeypatch.setattr(ph, "discover_adb_tls", lambda *a, **k: [])
+    monkeypatch.setattr(ph, "scan_open_ports", lambda ip, a, b: [51692])
+    cfg = types.SimpleNamespace(adb="adb", adb_home="", legacy_port=0, interface="wlan0")
+    link = ph.PhoneLink(cfg, types.SimpleNamespace(width=800, height=480), switch=None,
+                        candidates=lambda: ["192.168.8.44"], adb=FakeAdb())
+    for _ in range(4):
+        link._last_scan = float("-inf")
+        assert link._find_device() == ""
+    assert connects.count("192.168.8.44:51692") == ph.PORT_FAILS_IGNORE
