@@ -27,6 +27,15 @@ while [[ $# -gt 0 ]]; do
         *) TARGET="$1"; shift ;;
     esac
 done
+# A verified scrcpy server goes along with every update and replaces the Pi's copy
+# (it can't be downloaded there: no internet). Without one, the Pi keeps its own.
+JAR=()
+if "$REPO/scripts/fetch-scrcpy-server.sh" >/dev/null 2>&1; then    # verifies; downloads if needed
+    JAR=(vendor/scrcpy-server)
+else
+    echo "NOTE: couldn't get the scrcpy server (no internet?): the Pi keeps its own copy" >&2
+fi
+
 VERSION="prepared: $(date -u +%FT%TZ) (update-pi.sh)"
 GIT="$(git -C "$REPO" describe --always --dirty --tags 2>/dev/null || true)"
 
@@ -57,7 +66,7 @@ if [[ -n "$CARD" ]]; then
     [[ -d "$ROOTMNT/opt/mlpi" ]] || echo "NOTE: no /opt/mlpi on the card yet; installing anyway"
     tmp="$(mktemp -d /tmp/mlpi-update.XXXX)"
     tar -C "$REPO" --exclude='__pycache__' --exclude='*.pyc' -cf - \
-        src config systemd scripts docs README.md LICENSE pyproject.toml | tar -C "$tmp" -xf -
+        src config systemd scripts docs README.md LICENSE pyproject.toml "${JAR[@]}" | tar -C "$tmp" -xf -
     echo "==> installing onto the card ($rootpart)"
     MLPI_OPT="$ROOTMNT/opt/mlpi" MLPI_SYSTEMD_DIR="$ROOTMNT/etc/systemd/system" \
         MLPI_TOML=/nonexistent MLPI_SYSTEMCTL=true \
@@ -80,7 +89,7 @@ SSH=(ssh -i "$KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new
 echo "==> copying the code to $TARGET"
 {
     tar -C "$REPO" --exclude='__pycache__' --exclude='*.pyc' -cf - \
-        src config systemd scripts docs README.md LICENSE pyproject.toml
+        src config systemd scripts docs README.md LICENSE pyproject.toml "${JAR[@]}"
 } | "${SSH[@]}" "$TARGET" \
     'rm -rf /tmp/mlpi-update && mkdir -p /tmp/mlpi-update && tar -C /tmp/mlpi-update -xf -' \
     || { echo "ERROR: couldn't reach $TARGET (Pi plugged in? LED blinking twice? if the card"

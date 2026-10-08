@@ -381,3 +381,24 @@ def test_scanned_port_that_is_not_adb_is_skipped_after_two_failures(monkeypatch)
         link._last_scan = float("-inf")
         assert link._find_device() == ""
     assert connects.count("192.168.8.44:51692") == ph.PORT_FAILS_IGNORE
+
+
+def test_scrcpy_server_that_exits_is_reported_with_its_last_words(tmp_path):
+    """A damaged scrcpy-server file: the phone prints "Aborted" and the server exits.
+    Say so at once instead of waiting 20 s for "did not start"."""
+    import socket as _socket
+    listener = _socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()                 # accepts, but never sends the dummy byte
+    log = tmp_path / "phone-server.log"
+    log.write_text("Aborted \n")
+    server = types.SimpleNamespace(poll=lambda: 134)
+    link = ph.PhoneLink(types.SimpleNamespace(adb="adb", adb_home=""),
+                        types.SimpleNamespace(width=800, height=480), switch=None)
+    try:
+        link._connect_video(listener.getsockname()[1], ph.time.monotonic() + 20, server, log)
+        raise AssertionError("expected PhoneDisconnected")
+    except ph.PhoneDisconnected as exc:
+        assert str(exc) == "scrcpy server exited: Aborted"
+    finally:
+        listener.close()

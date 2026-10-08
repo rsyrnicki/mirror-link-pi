@@ -320,7 +320,11 @@ def test_update_pi_card_installs_onto_a_card_in_the_laptop(tmp_path):
         subprocess.run(["mount", f"{dev}p2", str(mnt)], check=True)
         opt = mnt / "opt/mlpi"
         assert (opt / "src/mlpi/phone.py").stat().st_size > 0
-        assert (opt / "vendor/scrcpy-server").read_text() == "jar"      # kept
+        repo_jar = REPO / "vendor" / "scrcpy-server"
+        if repo_jar.is_file():          # verified copy on the laptop: it replaces the card's
+            assert (opt / "vendor/scrcpy-server").read_bytes() == repo_jar.read_bytes()
+        else:                           # none (offline): the card keeps its own
+            assert (opt / "vendor/scrcpy-server").read_text() == "jar"
         assert "(card)" in (opt / "VERSION").read_text()
         link = mnt / "etc/systemd/system/sysinit.target.wants/mlpi-bootcheck.service"
         assert os.readlink(link) == "/etc/systemd/system/mlpi-bootcheck.service"
@@ -328,3 +332,25 @@ def test_update_pi_card_installs_onto_a_card_in_the_laptop(tmp_path):
     finally:
         subprocess.run(["umount", str(mnt)], capture_output=True)
         subprocess.run(["losetup", "-d", dev], capture_output=True)
+
+
+def test_apply_update_replaces_a_damaged_scrcpy_server_with_the_shipped_one(tmp_path):
+    """An update cut short by a power cut left the jar empty; the phone then only said
+    "Aborted". A verified copy that comes with the update must replace it."""
+    opt, sysd, src = tmp_path / "opt", tmp_path / "systemd", tmp_path / "update"
+    (opt / "vendor").mkdir(parents=True)
+    (opt / "vendor/scrcpy-server").write_bytes(b"")          # damaged
+    sysd.mkdir()
+    shutil.copytree(REPO / "scripts", src / "scripts")
+    (src / "systemd").mkdir()
+    (src / "systemd/mlpi.service").write_text("[Unit]\n")
+    (src / "systemd/mlpi.target").write_text("[Unit]\n")
+    (src / "vendor").mkdir()
+    (src / "vendor/scrcpy-server").write_bytes(b"not the real jar")
+    env = dict(os.environ, MLPI_OPT=str(opt), MLPI_SYSTEMD_DIR=str(sysd),
+               MLPI_TOML=str(tmp_path / "none.toml"), MLPI_SYSTEMCTL="true")
+    out = subprocess.run(["bash", str(REPO / "scripts/apply-update.sh"), str(src), "0", "v"],
+                         capture_output=True, text=True, timeout=60, env=env)
+    assert out.returncode == 0, out.stderr
+    assert (opt / "vendor/scrcpy-server").read_bytes() == b"not the real jar"   # replaced
+    assert "damaged" in out.stdout                    # and its checksum doesn't match

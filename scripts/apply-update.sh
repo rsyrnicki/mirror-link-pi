@@ -15,8 +15,17 @@ echo "==> installing into $OPT"
 rm -rf "$OPT.new"
 cp -r "$SRC" "$OPT.new"
 chown -R 0:0 "$OPT.new" 2>/dev/null || true    # unpacked as the Pi user
-if [[ -d "$OPT/vendor" ]]; then
-    cp -a "$OPT/vendor" "$OPT.new/"           # the downloaded scrcpy server
+if [[ ! -s "$OPT.new/vendor/scrcpy-server" && -d "$OPT/vendor" ]]; then
+    cp -a "$OPT/vendor" "$OPT.new/"           # no fresh copy came along: keep the old one
+fi
+# The scrcpy server must match the pinned checksum: an update cut short by a power
+# cut once left it empty, and the phone then only answers "Aborted".
+want="$(sed -n 's/^SHA256="\([0-9a-f]*\)"$/\1/p' "$OPT.new/scripts/fetch-scrcpy-server.sh" 2>/dev/null || true)"
+jar="$OPT.new/vendor/scrcpy-server"
+if [[ -n "$want" && -e "$jar" ]] && ! echo "$want  $jar" | sha256sum -c --status; then
+    echo "WARNING: $OPT/vendor/scrcpy-server is damaged (checksum mismatch): phone mode"
+    echo "         won't start. Run ./scripts/update-pi.sh from a laptop with internet"
+    echo "         access, which brings a verified copy."
 fi
 printf '%s\n' "$@" > "$OPT.new/VERSION"
 rm -rf "$OPT.old"

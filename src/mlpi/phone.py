@@ -1256,8 +1256,20 @@ class PhoneLink:
             args.append("keep_active=true")
         return args
 
-    def _connect_video(self, port: int, deadline: float) -> socket.socket:
+    def _connect_video(self, port: int, deadline: float, server=None,
+                       server_log: Path | None = None) -> socket.socket:
         while time.monotonic() < deadline and not self._stop.is_set():
+            if server is not None and server.poll() is not None:
+                # It exited instead of listening: say what it said ("Aborted" = the
+                # scrcpy-server file on the Pi is damaged).
+                last = ""
+                try:
+                    lines = [x for x in server_log.read_text(errors="replace").splitlines()
+                             if x.strip()] if server_log else []
+                    last = lines[-1].strip()[:80] if lines else ""
+                except OSError:
+                    pass
+                raise PhoneDisconnected("scrcpy server exited" + (f": {last}" if last else ""))
             sock = socket.create_connection(("127.0.0.1", port), timeout=3)
             sock.settimeout(3)
             try:
@@ -1290,7 +1302,8 @@ class PhoneLink:
         decoder_box: tuple[int, int, int, int] | None = None
         video = control = None
         try:
-            video = self._connect_video(port, time.monotonic() + 20)
+            video = self._connect_video(port, time.monotonic() + 20, server,
+                                        directory / "phone-server.log" if directory else None)
             control = socket.create_connection(("127.0.0.1", port), timeout=5)
             with self._control_lock:
                 self._control = control

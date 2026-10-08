@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed: an update cut short by a power cut left the scrcpy server on the Pi empty, and
+  later updates kept that copy (phone mode then fails with "Aborted"). Every update now
+  brings the laptop's checksum-verified copy (`fetch-scrcpy-server.sh` downloads it if
+  needed) and warns if the Pi's copy is damaged; the status line names the server's
+  own error when it exits instead of starting.
 - `update-pi.sh --card /dev/sdX`: update the card in the laptop when the Pi can't be
   reached over USB. Updates are now flushed to the card before the Pi reboots, so a
   power cut right after an update can't leave empty files behind.
