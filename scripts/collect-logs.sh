@@ -113,6 +113,12 @@ fi
 DEST="${DEST:-$PWD/car-logs/$(date +%Y-%m-%d_%H%M%S)}"
 mkdir -p "$DEST"
 cp -a "$SRC/sessions" "$DEST/"
+# With --pi the Pi is running on this laptop right now: its newest session is this
+# laptop start, not the drive. Remember it, so latest.zip can skip it.
+RUNNING=""
+if [[ -n "$PI" && -L "$DEST/sessions/current" ]]; then
+    RUNNING="$(basename "$(readlink "$DEST/sessions/current")")"
+fi
 rm -f "$DEST/sessions/current"
 cp -a "$SRC/boot-count" "$SRC/winner-variant" "$DEST/" 2>/dev/null || true
 
@@ -160,10 +166,11 @@ PYTHONPATH="$REPO/src" python3 -m mlpi report "$DEST"/sessions/[0-9]* > "$DEST/R
 
 # One upload-sized zip per session (the full set is often too big to send).
 mkdir -p "$DEST/zips"
-python3 - "$DEST" "$REPO/src" <<'PY'
+python3 - "$DEST" "$REPO/src" "$RUNNING" <<'PY'
 import subprocess, sys, zipfile
 from pathlib import Path
 dest, src = Path(sys.argv[1]), sys.argv[2]
+running = sys.argv[3] if len(sys.argv) > 3 else ""   # --pi: the session of this very start
 LIMIT = 20_000_000                      # bytes per file in the upload zips
 sessions = sorted(p for p in (dest / "sessions").iterdir() if p.is_dir() and p.name.isdigit())
 rootfs = dest / "rootfs-sessions"     # written while the data partition wasn't mounted
@@ -188,9 +195,12 @@ for s in sessions + extra:
             z.writestr(f"{s.name}/SKIPPED.txt", "left out of this zip (still in sessions/):\n"
                        + "".join(f"  {x}\n" for x in skipped))
     print(f"  {out.name}: {out.stat().st_size / 1e6:.1f} MB")
-if sessions:
-    latest = dest / "zips" / f"session-{sessions[-1].name}.zip"
+earlier = [x for x in sessions if x.name != running]
+if earlier:
+    pick = earlier[-1]
+    latest = dest / "zips" / f"session-{pick.name}.zip"
     (dest / "zips" / "latest.zip").write_bytes(latest.read_bytes())
+    (dest / "zips" / "LATEST-IS.txt").write_text(pick.name + "\n")
 PY
 
 if [[ -n "${SUDO_USER:-}" ]]; then
@@ -199,7 +209,11 @@ fi
 
 echo "copied $(ls "$DEST/sessions" | wc -l) session(s) to $DEST"
 echo "summary: $DEST/REPORT.txt"
-echo "to send one session: $DEST/zips/latest.zip (or zips/session-NNNN.zip)"
+if [[ -f "$DEST/zips/LATEST-IS.txt" ]]; then
+    echo "to send the last drive: $DEST/zips/latest.zip = session $(cat "$DEST/zips/LATEST-IS.txt")"
+    [[ -n "$RUNNING" ]] && echo "  (session $RUNNING is this laptop start, left out of latest.zip)"
+fi
+echo "every session: $DEST/zips/session-NNNN.zip"
 if [[ -d "$DEST/rootfs-sessions" ]]; then
     echo "NOTE: $(ls "$DEST/rootfs-sessions" | wc -l) session(s) were written while the data partition"
     echo "      wasn't mounted: zips/rootfs-session-NNNN.zip"

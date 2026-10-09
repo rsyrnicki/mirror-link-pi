@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `collect-logs.sh --pi`: `latest.zip` is now the last drive, not the session of the
+  laptop start the logs are being fetched from (that one is still in `zips/`).
 - `update-pi.sh` sets the Pi's clock from the laptop (the Pi has none; session times
   were days off) and no longer floods the terminal with tar timestamp warnings.
 - adb connects give up after 3 s instead of 8 (some open ports on the phone hang).
