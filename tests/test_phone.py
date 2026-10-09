@@ -359,29 +359,34 @@ def test_only_addresses_of_connected_phones_are_tried():
     assert d.connected_addresses(None) == ["192.168.8.45", "192.168.8.44"]
 
 
-def test_scanned_port_that_is_not_adb_is_skipped_after_two_failures(monkeypatch):
-    """The A56 keeps one unrelated port open all the time; it must not cost an adb
-    connect (or trigger "pair it") on every scan."""
-    connects = []
+def test_port_refused_at_first_is_retried_on_every_scan(monkeypatch):
+    """Seen on the A56: right after Wireless debugging is switched on, the first two
+    connects to its port fail; the third works. The port must not be given up on."""
+    attempts = []
 
     class FakeAdb:
+        last_output = "failed to connect to '192.168.8.44:42497': Connection reset by peer"
+
         def devices(self):
             return []
 
         def connect(self, target):
-            connects.append(target)
-            return False
+            attempts.append(target)
+            return target.endswith(":42497") and attempts.count(target) >= 3
+
+        def state(self, target):
+            return "device"
 
     monkeypatch.setattr(ph, "discover_adb_tls", lambda *a, **k: [])
-    monkeypatch.setattr(ph, "scan_open_ports", lambda ip, a, b: [51692])
+    monkeypatch.setattr(ph, "scan_open_ports", lambda ip, a, b: [42497, 51692])
     cfg = types.SimpleNamespace(adb="adb", adb_home="", legacy_port=0, interface="wlan0")
     link = ph.PhoneLink(cfg, types.SimpleNamespace(width=800, height=480), switch=None,
                         candidates=lambda: ["192.168.8.44"], adb=FakeAdb())
-    for _ in range(4):
+    results = []
+    for _ in range(3):
         link._last_scan = float("-inf")
-        assert link._find_device() == ""
-    assert connects.count("192.168.8.44:51692") == ph.PORT_FAILS_IGNORE
-
+        results.append(link._find_device())
+    assert results == ["", "", "192.168.8.44:42497"]
 
 def test_scrcpy_server_that_exits_is_reported_with_its_last_words(tmp_path):
     """A damaged scrcpy-server file: the phone prints "Aborted" and the server exits.

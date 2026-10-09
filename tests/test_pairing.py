@@ -207,18 +207,5 @@ def test_debugging_port_refused_before_pairing_is_tried_again_after_it(monkeypat
     for _ in range(3):                                # refused: skipped after two tries
         link._last_scan = float("-inf")
         assert link._find_device() == ""
-    assert link._skip_port("192.168.8.44:38959")
     link._pair("192.168.8.44", "37001", "123456")
     assert link._find_device() == "192.168.8.44:38959"
-
-
-def test_skipped_port_expires(monkeypatch):
-    link = ph.PhoneLink(types.SimpleNamespace(adb="adb", adb_home=""),
-                        types.SimpleNamespace(width=800, height=480), switch=None)
-    now = [1000.0]
-    monkeypatch.setattr(ph.time, "monotonic", lambda: now[0])
-    link._port_failed("ip:1")
-    link._port_failed("ip:1")
-    assert link._skip_port("ip:1")
-    now[0] += ph.PORT_SKIP_SECONDS + 1
-    assert not link._skip_port("ip:1")

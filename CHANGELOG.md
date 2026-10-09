@@ -21,9 +21,7 @@
   the root file system (`zips/rootfs-session-NNNN.zip`).
 - Faster phone discovery after switching on Wireless debugging: the port scan runs
   every 15 s instead of 30 s and with 2000 parallel connects instead of 400 (it took
-  ~20 s in the car); ports that fail twice (the A56 keeps one unrelated port open) are
-  skipped for 5 minutes and not taken as "the phone refuses this Pi". Pairing clears
-  that list: the phone's real debugging port also fails until the phone is paired.
+  ~20 s in the car). Failed connects are logged with adb's own message.
 
 ## 1.1.0 — 2026-10-02
 

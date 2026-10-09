@@ -180,7 +180,7 @@ send icons). Names are drawn with the Pi's pixel font: letters are converted, e.
 | `waiting for the phone on Wi-Fi` | The phone isn't on MirrorLink-Pi. |
 | `phone on Wi-Fi, but wireless debugging is off` | Switch Wireless debugging on. (With the phone's screen off, Android ignores the usual network announcement, so the Pi also scans for the debugging port, at most every 30 s, and remembers it for next time.) |
 | `phone refused adb: pair it` | Pair on the car screen (see *Pair the phone with the Pi's key*). |
-| `phone doesn't know this Pi: pair it on the car screen` | The number pad is up. Its message says why: *NOT FOUND: IS WIRELESS DEBUGGING ON?* (switch it on; the phone then usually connects by itself) or *THE PHONE DOESN'T KNOW THIS PI* (open *Pair device with pairing code* on the phone and type the code). |
+| `phone doesn't know this Pi: pair it on the car screen` | The number pad is up. *WIRELESS DEBUGGING ON? IF YES, PAIR:* the Pi hasn't reached the phone for 20 s: switch Wireless debugging on (the phone then usually connects by itself within ~20 s). *THE PHONE DOESN'T KNOW THIS PI*: the phone announced debugging but refused the Pi; open *Pair device with pairing code* on the phone and type the code. |
 | `starting scrcpy on …` | Connected; starting the stream. |
 | `streaming … 800x480` | Working. |
 | `phone lost: …` | The reason is in the session log. The Pi retries every few seconds. |
