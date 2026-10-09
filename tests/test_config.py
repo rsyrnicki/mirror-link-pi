@@ -105,3 +105,16 @@ def test_broken_explicit_config_still_raises(monkeypatch, tmp_path):
     import tomllib
     with pytest.raises(tomllib.TOMLDecodeError):
         config.load(path=f)
+
+
+def test_setting_in_the_wrong_section_is_reported(monkeypatch, tmp_path):
+    """dpi under [usb] was silently ignored; now it's named, with where it belongs."""
+    monkeypatch.setattr(config, "SYSTEM_CONFIG", tmp_path / "missing.toml")
+    monkeypatch.setattr(config, "PROJECT_CONFIG", tmp_path / "missing2.toml")
+    boot = tmp_path / "boot.toml"
+    boot.write_text("[usb]\ndpi = 200\n[phone]\nenabled = true\n[nonsense]\nx = 1\n")
+    monkeypatch.setattr(config, "BOOT_CONFIG", boot)
+    cfg = config.load()
+    assert cfg.phone.dpi == 120 and cfg.phone.enabled
+    assert any("dpi under [usb]" in w and "[phone]" in w for w in config.load_warnings)
+    assert any("[nonsense]" in w for w in config.load_warnings)

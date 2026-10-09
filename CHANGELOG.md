@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Settings the Pi doesn't know (or in the wrong section, e.g. `dpi` under `[usb]`) are
+  no longer ignored silently: the session notes and the log show a CONFIG WARNING
+  naming the section they belong in. The example `mlpi.toml` now says that the phone
+  settings go into the `[phone]` section at the end of the file.
 - `collect-logs.sh --pi`: `latest.zip` is now the last drive, not the session of the
   laptop start the logs are being fetched from (that one is still in `zips/`).
 - `update-pi.sh` sets the Pi's clock from the laptop (the Pi has none; session times

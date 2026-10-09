@@ -248,7 +248,7 @@ def load(path: str | Path | None = None) -> Config:
     for src in sources:
         try:
             with src.open("rb") as fh:
-                _merge(cfg, tomllib.load(fh))
+                _merge(cfg, tomllib.load(fh), source=src)
         except (OSError, tomllib.TOMLDecodeError) as exc:
             if path is not None and src == Path(path):
                 raise
@@ -266,17 +266,36 @@ def load(path: str | Path | None = None) -> Config:
 load_warnings: list[str] = []
 
 
-def _merge(cfg: Config, data: dict[str, Any]) -> None:
+def _merge(cfg: Config, data: dict[str, Any], source: Path | None = None) -> None:
     for section_name, section_data in data.items():
         if not isinstance(section_data, dict):
             continue
         section = getattr(cfg, section_name, None)
         if not is_dataclass(section):
+            _unknown(cfg, source, section_name, None)
             continue
         valid = {f.name for f in fields(section)}
         for key, value in section_data.items():
             if key in valid:
                 setattr(section, key, value)
+            else:
+                _unknown(cfg, source, section_name, key)
+
+
+def _unknown(cfg: Config, source: Path | None, section: str, key: str | None) -> None:
+    """A setting the Pi doesn't know is ignored, so say so (session notes, log), with
+    the section it belongs in when that's the mistake (e.g. dpi under [usb])."""
+    where = f" in {source}" if source else ""
+    if key is None:
+        message = f"unknown section [{section}]{where} is ignored"
+    else:
+        homes = [f.name for f in fields(cfg)
+                 if is_dataclass(getattr(cfg, f.name))
+                 and key in {g.name for g in fields(getattr(cfg, f.name))}]
+        hint = f" (it belongs under [{homes[0]}])" if homes else ""
+        message = f"unknown setting {key} under [{section}]{where} is ignored{hint}"
+    load_warnings.append(message)
+    print(f"mlpi: WARNING: {message}", file=sys.stderr)
 
 
 def _apply_env(cfg: Config, env: dict[str, str] | os._Environ) -> None:

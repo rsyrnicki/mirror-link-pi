@@ -30,7 +30,9 @@ ml_command = false
 
 # Phone mode (docs/phone-mode.md): mirror an Android phone with scrcpy over the Pi's
 # own Wi-Fi hotspot. `prepare-sd.sh --phone` appends an active [phone] section with a
-# random Wi-Fi password; these are the other settings you can add to it:
+# random Wi-Fi password AT THE END OF THIS FILE. The settings below go into that
+# section, at the end: uncommenting one here would put it under [usb], where it is
+# ignored (the session notes then show a CONFIG WARNING).
 # [phone]
 # enabled = true
 # wifi_ssid = "MirrorLink-Pi"

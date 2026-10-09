@@ -229,9 +229,9 @@ def run(cfg: Config) -> int:
     log_path = setup_logging(cfg, session)
     log.info("mlpi %s starting, session %s, log %s", __version__, session.directory, log_path)
 
-    for warning in config_mod.load_warnings:
+    for i, warning in enumerate(config_mod.load_warnings, 1):
         log.warning(warning)
-        session.note("CONFIG WARNING", warning)
+        session.note(f"CONFIG WARNING {i}", warning)
 
     variants_file = Path(cfg.experiment.variants_file) if cfg.experiment.variants_file \
         else DEFAULT_VARIANTS_FILE
