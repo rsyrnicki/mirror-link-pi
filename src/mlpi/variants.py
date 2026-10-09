@@ -123,7 +123,13 @@ class VariantManager:
     ) -> None:
         if not variants:
             raise ValueError("need at least one variant")
-        self._variants = list(variants)
+        # Bluetooth-audio variants only when asked for by name: on the VW MIB2 Standard
+        # the car took the extra Bluetooth entries for a second device with the phone's
+        # address and then refused the real phone ("device already exists"). So the
+        # rotation never lands on one by itself, and a saved winner can't bring it back.
+        wanted = {start_variant} | ({fixed_variant} if mode == "fixed" else set())
+        self._variants = [v for v in variants if not v.bt_apps or v.name in wanted] \
+            or list(variants)
         self._mode = mode
         self._gap = attempt_gap_seconds
         self._cycles = max(1, int(cycles_per_variant))

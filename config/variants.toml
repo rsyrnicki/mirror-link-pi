@@ -49,7 +49,9 @@ app_trust_level = "0x80"
 
 [[variant]]
 name = "s6-audio-home-bt"
-# Not first on purpose: try it with [experiment] start_variant = "s6-audio-home-bt".
+# Opt-in only ([experiment] start_variant = "s6-audio-home-bt"): never used by the
+# rotation. On the VW MIB2 Standard it breaks the phone's normal Bluetooth connection
+# (the car sees a second device with the same address: "device already exists").
 description = "s6-audio-home plus the phone's Bluetooth A2DP/HFP audio entries and Bluetooth address, so the car can use the phone's Bluetooth as the audio link. Same as s6-audio-home until the phone's address is known."
 home_app = true
 rtp_apps = true

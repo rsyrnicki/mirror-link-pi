@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The Bluetooth-audio variant `s6-audio-home-bt` is opt-in only (rotation never picks
+  it, it's never kept as the winner): on the VW MIB2 Standard it blocked the phone's
+  normal Bluetooth connection ("a connection with the same device already exists").
 - Fixed: an update cut short by a power cut left the scrcpy server on the Pi empty, and
   later updates kept that copy (phone mode then fails with "Aborted"). Every update now
   brings the laptop's checksum-verified copy (`fetch-scrcpy-server.sh` downloads it if

@@ -251,6 +251,13 @@ colour format the Pi has to convert in Python. Use `mlpi car-view` (desk test 2)
 
 ## Bluetooth audio auto-connect (experimental)
 
+> **Result on the VW MIB2 Standard: don't use it.** The car took the Bluetooth entries
+> as an existing connection to the phone and then refused the phone's normal
+> Bluetooth connection ("Unable to connect. A connection with the same device already
+> exists"), and there was no sound. The variant is therefore opt-in only: the rotation
+> never picks it, and it isn't kept as the remembered winner. It may behave differently
+> on other head units.
+
 Normally the car doesn't switch to the phone's Bluetooth by itself while the MirrorLink
 app runs. The variant `s6-audio-home-bt` additionally tells the car that the "MirrorLink
 phone" has Bluetooth audio (A2DP for music, HFP for calls) at the phone's Bluetooth

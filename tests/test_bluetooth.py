@@ -80,3 +80,15 @@ def test_start_variant_overrides_the_winner(tmp_path):
     vs = [Variant(name="a"), Variant(name="b"), Variant(name="c")]
     assert VariantManager(vs, state_dir=tmp_path).current.name == "b"
     assert VariantManager(vs, state_dir=tmp_path, start_variant="a").current.name == "a"
+
+
+def test_bluetooth_variant_is_opt_in_only(tmp_path):
+    """The MIB2 Standard refused the real phone over Bluetooth with the BT variant:
+    the rotation must not land on it, and a saved winner must not bring it back."""
+    vs = [Variant(name="plain"), Variant(name="bt", bt_apps=True), Variant(name="other")]
+    (tmp_path / "winner-variant").write_text("bt\n")
+    mgr = VariantManager(vs, state_dir=tmp_path)
+    assert mgr.names() == ["plain", "other"] and mgr.current.name == "plain"
+    opted = VariantManager(vs, state_dir=tmp_path, start_variant="bt")
+    assert opted.current.name == "bt"
+    assert VariantManager(vs, mode="fixed", fixed_variant="bt").current.name == "bt"
