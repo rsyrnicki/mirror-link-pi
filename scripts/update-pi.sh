@@ -91,7 +91,7 @@ echo "==> copying the code to $TARGET"
     tar -C "$REPO" --exclude='__pycache__' --exclude='*.pyc' -cf - \
         src config systemd scripts docs README.md LICENSE pyproject.toml "${JAR[@]}"
 } | "${SSH[@]}" "$TARGET" \
-    'rm -rf /tmp/mlpi-update && mkdir -p /tmp/mlpi-update && tar -C /tmp/mlpi-update -xf -' \
+    "sudo date -u -s @$(date -u +%s) >/dev/null 2>&1; rm -rf /tmp/mlpi-update && mkdir -p /tmp/mlpi-update && tar -C /tmp/mlpi-update -xmf -" \
     || { echo "ERROR: couldn't reach $TARGET (Pi plugged in? LED blinking twice? if the card"
          echo "       was re-flashed: rm $KNOWN)"; exit 1; } >&2
 

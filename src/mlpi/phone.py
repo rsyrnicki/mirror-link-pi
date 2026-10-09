@@ -514,7 +514,9 @@ class Adb:
             return subprocess.CompletedProcess(cmd, 127, "", f"adb unavailable: {exc}")
 
     def connect(self, target: str) -> bool:
-        out = self.run("connect", target, timeout=8)
+        # A real debugging port answers within a second; some other open ports on the
+        # phone hang (8 s each in the car logs), which delays the next attempt.
+        out = self.run("connect", target, timeout=3)
         self.last_output = (out.stdout + out.stderr).strip()     # for the session log
         text = self.last_output.lower()
         return "connected to" in text and "cannot" not in text and "failed" not in text

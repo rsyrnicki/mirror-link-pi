@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `update-pi.sh` sets the Pi's clock from the laptop (the Pi has none; session times
+  were days off) and no longer floods the terminal with tar timestamp warnings.
+- adb connects give up after 3 s instead of 8 (some open ports on the phone hang).
 - The Bluetooth-audio variant `s6-audio-home-bt` is opt-in only (rotation never picks
   it, it's never kept as the winner): on the VW MIB2 Standard it blocked the phone's
   normal Bluetooth connection ("a connection with the same device already exists").
