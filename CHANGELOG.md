@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- When the phone's debugging port takes connections but adb never gets through
+  (seen in the car: "offline"/timeouts for minutes, two fresh pairings didn't help),
+  the Pi restarts its adb server after two such attempts and, if one port keeps
+  doing it, says so on the car screen: "DEBUGGING STUCK: TURN IT OFF AND ON".
 - Settings the Pi doesn't know (or in the wrong section, e.g. `dpi` under `[usb]`) are
   no longer ignored silently: the session notes and the log show a CONFIG WARNING
   naming the section they belong in. The example `mlpi.toml` now says that the phone
