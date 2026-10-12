@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `collect-logs.sh --pi --clear`: after copying, delete the sessions on the Pi (keeps
+  the running one; numbering continues).
 - When the phone's debugging port takes connections but adb never gets through
   (seen in the car: "offline"/timeouts for minutes, two fresh pairings didn't help),
   the Pi restarts its adb server after two such attempts and, if one port keeps

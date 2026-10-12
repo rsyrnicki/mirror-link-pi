@@ -5,6 +5,8 @@
 # Usage:
 #   ./scripts/collect-logs.sh --pi [user@host] [dest-dir]   # over the USB cable (SSH),
 #                                                           # card stays in the Pi
+#   ./scripts/collect-logs.sh --pi --clear                  # … then delete the copied
+#                                                           # sessions on the Pi
 #   sudo ./scripts/collect-logs.sh /dev/sdX [dest-dir]      # the SD card device
 #   sudo ./scripts/collect-logs.sh --root DIR [dest-dir]    # rootfs already mounted
 #
@@ -28,6 +30,7 @@ DEST=""
 MNT=""
 PI=""
 EXTRA_MNTS=()
+CLEAR=0
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -38,8 +41,9 @@ while [[ $# -gt 0 ]]; do
             PI="mlpi"
             if [[ $# -gt 1 && "$2" != */* && "$2" != -* ]]; then PI="$2"; shift; fi
             shift ;;
+        --clear) CLEAR=1; shift ;;
         /dev/*) DEV="$1"; shift ;;
-        -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) DEST="$1"; shift ;;
     esac
 done
@@ -82,6 +86,7 @@ if [[ -n "$DEV" ]]; then
     fi
 fi
 
+(( CLEAR == 0 )) || [[ -n "$PI" ]] || die "--clear works with --pi only"
 if [[ -n "$PI" ]]; then
     [[ "$PI" == *@* ]] || PI="$PI@192.168.7.2"
     KEY="${MLPI_SSH_KEY:-$HOME/.config/mlpi/ssh/id_ed25519}"
@@ -221,4 +226,14 @@ fi
 if [[ -f "$DEST/mlpi-boot-problem.txt" ]]; then
     echo "NOTE: a start of MirrorLink-Pi failed: $DEST/mlpi-boot-problem.txt"
     head -1 "$DEST/mlpi-boot-problem.txt"
+fi
+
+# --clear: everything is copied and zipped on this laptop now, so the Pi can let go
+# of it. The running session stays (it's still being written); the boot counter
+# keeps counting, so session numbers stay unique across collections.
+if (( CLEAR )); then
+    keep="${RUNNING:-none}"
+    "${SSH[@]}" "sudo find /var/lib/mlpi/sessions -mindepth 1 -maxdepth 1 -name '[0-9]*' ! -name '$keep' -exec rm -rf {} +" \
+        && echo "cleared the copied sessions on the Pi (kept the running one: $keep)" \
+        || echo "WARNING: couldn't clear the sessions on the Pi" >&2
 fi

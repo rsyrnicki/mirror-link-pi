@@ -134,6 +134,12 @@ the Pi's USB port into the laptop, wait for 2 LED blinks, then
 ./scripts/collect-logs.sh --pi                   # → ./car-logs/<timestamp>/REPORT.txt
 ```
 
+The Pi keeps the last 40 sessions and deletes older ones by itself. To start with an
+empty list after collecting, add `--clear`: once everything is copied and zipped on
+the laptop, it deletes the sessions on the Pi (not the running one). Session numbers
+keep counting up, so they stay unique. On the laptop, old `car-logs/<timestamp>/`
+folders can simply be deleted.
+
 With the card in the laptop:
 
 ```bash
