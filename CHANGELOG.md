@@ -4,10 +4,6 @@
 
 - `collect-logs.sh --pi --clear`: after copying, delete the sessions on the Pi (keeps
   the running one; numbering continues).
-- When the phone's debugging port takes connections but adb never gets through
-  (seen in the car: "offline"/timeouts for minutes, two fresh pairings didn't help),
-  the Pi restarts its adb server after two such attempts and, if one port keeps
-  doing it, says so on the car screen: "DEBUGGING STUCK: TURN IT OFF AND ON".
 - Settings the Pi doesn't know (or in the wrong section, e.g. `dpi` under `[usb]`) are
   no longer ignored silently: the session notes and the log show a CONFIG WARNING
   naming the section they belong in. The example `mlpi.toml` now says that the phone
@@ -37,9 +33,11 @@
   left no trace before). A stuck session setup no longer holds back the USB gadget.
 - `collect-logs.sh` also brings home `mlpi-boot-problem.txt` and sessions that landed on
   the root file system (`zips/rootfs-session-NNNN.zip`).
-- Faster phone discovery after switching on Wireless debugging: the port scan runs
-  every 15 s instead of 30 s and with 2000 parallel connects instead of 400 (it took
-  ~20 s in the car). Failed connects are logged with adb's own message.
+- Phone discovery: the port scan runs every 15 s instead of 30 s. Failed connects are
+  logged with adb's own message; connects that hang give up after 5 s and get cleaned
+  up, and the Pi's adb server is restarted after repeated hangs. (A scan with 2000
+  parallel connects was tried and reverted: it missed open ports, once the debugging
+  port for a whole drive.)
 
 ## 1.1.0 — 2026-10-02
 

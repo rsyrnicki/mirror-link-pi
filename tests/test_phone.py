@@ -407,3 +407,38 @@ def test_scrcpy_server_that_exits_is_reported_with_its_last_words(tmp_path):
         assert str(exc) == "scrcpy server exited: Aborted"
     finally:
         listener.close()
+
+
+def test_hanging_port_restarts_adb_but_the_real_port_still_connects(monkeypatch):
+    """Car logs: one open port on the A56 hangs on every adb connect (not the debugging
+    port); the real debugging port appears next to it and must connect."""
+    calls = []
+    ports = [[33913], [33913], [33913, 42577]]
+
+    class FakeAdb:
+        last_output = "timeout"
+
+        def devices(self):
+            return []
+
+        def connect(self, target):
+            return target.endswith(":42577")
+
+        def state(self, target):
+            return "device"
+
+        def run(self, *args, serial="", timeout=20.0):
+            calls.append(args)
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ph, "discover_adb_tls", lambda *a, **k: [])
+    monkeypatch.setattr(ph, "scan_open_ports", lambda ip, a, b: ports.pop(0))
+    cfg = types.SimpleNamespace(adb="adb", adb_home="", legacy_port=0, interface="wlan0")
+    link = ph.PhoneLink(cfg, types.SimpleNamespace(width=800, height=480), switch=None,
+                        candidates=lambda: ["192.168.8.44"], adb=FakeAdb())
+    results = []
+    for _ in range(3):
+        link._last_scan = float("-inf")
+        results.append(link._find_device())
+    assert results == ["", "", "192.168.8.44:42577"]
+    assert ("kill-server",) in calls

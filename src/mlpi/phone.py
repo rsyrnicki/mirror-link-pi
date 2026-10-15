@@ -79,8 +79,6 @@ STATUS_POLL_SECONDS = 30
 CONNECTIVITY_RECHECK_SECONDS = 120
 SCAN_INTERVAL = 15               # s between port scans while the phone isn't found
 OFFLINE_RESTART_AFTER = 2       # hung adb connects (offline/timeout) before restarting adb
-STUCK_AFTER = 4                  # hung connects to one port before telling the driver
-STUCK_HINT = "DEBUGGING STUCK: TURN IT OFF AND ON"
 NOT_FOUND_HINT = "WIRELESS DEBUGGING ON? IF YES, PAIR:"
 REFUSED_HINT = "THE PHONE DOESN'T KNOW THIS PI: PAIR IT"
 
@@ -395,7 +393,7 @@ def _raise_fd_limit(want: int) -> int:
         return 1024
 
 
-def scan_open_ports(ip: str, first: int, last: int, *, concurrency: int = 2000,
+def scan_open_ports(ip: str, first: int, last: int, *, concurrency: int = 500,
                     timeout: float = 0.6, deadline: float = 30.0) -> list[int]:
     """TCP-connect scan of ip:first..last; returns the ports that accepted.
 
@@ -404,8 +402,9 @@ def scan_open_ports(ip: str, first: int, last: int, *, concurrency: int = 2000,
     through. Closed ports answer with a reset at once, so ~28 000 ports take a few
     seconds on the hotspot.
     """
-    # The phone's Wi-Fi answers in batches (power saving), ~0.3 s per round trip: with
-    # 400 connects in flight, 28 000 ports took ~20 s in the car; 2000 should need ~5 s.
+    # 2000 connects in flight scanned in ~9 s but missed open ports: a port the phone
+    # keeps open all the time showed up in 3 of 9 scans (sessions 47-63), and the
+    # debugging port was missed on a whole drive. 400 found them every time (~20 s).
     concurrency = max(50, min(concurrency, _raise_fd_limit(concurrency + 256) - 256))
     sel = selectors.DefaultSelector()
     pending: dict[socket.socket, tuple[int, float]] = {}
@@ -679,7 +678,6 @@ class PhoneLink:
         self._serial = ""
         self._last_scan = float("-inf")
         self._offline_count = 0                   # connects that hung (offline/timeout)
-        self._hung: dict[str, int] = {}           # "ip:port" → hung connects in a row
 
     # ----- helpers -----
 
@@ -1073,12 +1071,7 @@ class PhoneLink:
                 and time.monotonic() >= self._pairing_dismissed_until):
             # Not seen at all: often just Wireless debugging off or the phone asleep
             # (it connects by itself once that's fixed); pairing is the second guess.
-            # A port that keeps hanging is the more specific diagnosis: keep saying so.
-            if any(n >= STUCK_AFTER for n in self._hung.values()):
-                self._show_pairing(ips[0], STUCK_HINT)
-                self._set_status("phone's wireless debugging is stuck: switch it off and on")
-            else:
-                self._show_pairing(ips[0], NOT_FOUND_HINT)
+            self._show_pairing(ips[0], NOT_FOUND_HINT)
         return ""
 
     # ----- pairing from the car screen -----
@@ -1103,7 +1096,7 @@ class PhoneLink:
         self._pair_ip = ip
         # Hints replace each other, never a pairing result or what is being typed.
         if hint and not self.pairing.code and not self.pairing.busy and \
-                self.pairing.message in ("", NOT_FOUND_HINT, REFUSED_HINT, STUCK_HINT) and \
+                self.pairing.message in ("", NOT_FOUND_HINT, REFUSED_HINT) and \
                 self.pairing.message != hint:
             self.pairing.set_message(hint)
         if not self.switch.showing(self.pairing.frame):
@@ -1197,7 +1190,6 @@ class PhoneLink:
             if state == "device":
                 self._remember_port(target)
                 self._unreachable_since = None
-                self._hung.clear()
                 return target
             if state == "unauthorized":
                 self._set_status("phone refused adb: pair it (docs/phone-mode.md)")
@@ -1210,20 +1202,15 @@ class PhoneLink:
 
     def _connect_hung(self, target: str) -> None:
         """The port took the TCP connection but adb never got through ("offline" or a
-        timeout). First suspect the Pi's adb server (restart it); if one port keeps
-        doing it, the phone's Wireless debugging is stuck (seen in the car: two fresh
-        pairings didn't help), which only switching it off and on clears."""
+        timeout). Usually it isn't the debugging port at all: the A56 keeps another
+        port open that hangs on every adb connect (33913, 35049, 51692 in the logs)
+        while the real one connects at once. Restart the Pi's adb server now and then
+        in case it's the Pi's side."""
         self._offline_count += 1
         if self._offline_count % OFFLINE_RESTART_AFTER == 0:
             out = self.adb.run("kill-server", timeout=15)
             self._event("phone_adb_restart", offline=self._offline_count, rc=out.returncode)
-        self._hung[target] = self._hung.get(target, 0) + 1
-        if self._hung[target] == STUCK_AFTER:
-            self._event("phone_debugging_stuck", target=target)
-            if self.pairing and self.switch is not None and \
-                    time.monotonic() >= self._pairing_dismissed_until:
-                self._show_pairing(target.rsplit(":", 1)[0], STUCK_HINT)
-            self._set_status("phone's wireless debugging is stuck: switch it off and on")
+
 
     def _port_file(self) -> Path | None:
         if not self.session:
