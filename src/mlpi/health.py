@@ -13,11 +13,14 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from .session import Session
 
 log = logging.getLogger(__name__)
+
+STARTUP_WATCH_SECONDS = 60   # supply checked every second this long after the start
 
 THROTTLE_BITS = {
     0: "undervoltage now", 1: "arm frequency capped now", 2: "throttled now",
@@ -105,6 +108,7 @@ class HealthMonitor:
     def run(self) -> None:
         last_throttled = object()
         n = 0
+        self._watch_startup_power()
         while not self._stop.is_set():
             snap = snapshot()
             changed = snap["throttled"] != last_throttled
@@ -121,6 +125,23 @@ class HealthMonitor:
                     self.session.event("wifi", **station)
             n += 1
             self._stop.wait(self.interval)
+
+    def _watch_startup_power(self, seconds: float = STARTUP_WATCH_SECONDS) -> None:
+        """Check the supply every second while starting up and write any alarm to the
+        card at once. In the car, some starts ended ~22 s after power-on, just when
+        the Wi-Fi hotspot comes up (the biggest current draw), with no trace of why:
+        if the car's USB port sags before it cuts out, this records it."""
+        deadline = time.monotonic() + seconds
+        last = None
+        while time.monotonic() < deadline and not self._stop.is_set():
+            value = read_throttled()
+            if value is not None and value != last:
+                if value:                                 # any alarm, as soon as it shows
+                    self.session.event("power", throttled=f"0x{value:x}",
+                                       flags=decode_throttled(value))
+                    self.session.sync()               # the next moment may be the cut
+                last = value
+            self._stop.wait(1.0)
 
     def stop(self) -> None:
         self._stop.set()

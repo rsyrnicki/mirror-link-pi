@@ -261,7 +261,9 @@ def _health_section(events: list[dict], directory: Path) -> list[str]:
     out = []
     health = [e for e in events if e.get("kind") == "health"]
     if health:
-        flags = sorted({f for e in health for f in e.get("throttled_flags", [])})
+        flags = sorted({f for e in health for f in e.get("throttled_flags", [])}
+                       | {f for e in events if e.get("kind") == "power"
+                          for f in e.get("flags", [])})
         temps = [e["temp_c"] for e in health if e.get("temp_c") is not None]
         loads = [e["load"][0] for e in health if e.get("load")]
         out += ["", "Pi health:",

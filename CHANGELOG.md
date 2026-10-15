@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The Pi checks its power supply every second during the first minute after a start
+  and writes any under-voltage alarm to the card at once. Several starts in the car
+  ended ~22 s after power-on (when the Wi-Fi hotspot comes up) without a trace; this
+  shows whether the car's USB port sagged before cutting out.
 - mDNS discovery also listens on port 5353: the phone's announcement of its debugging
   (and pairing) port never arrived in any session, likely because Android answers by
   multicast, which the query's own port doesn't receive. If it works, the Pi knows the
