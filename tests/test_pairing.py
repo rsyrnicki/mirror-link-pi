@@ -209,3 +209,36 @@ def test_debugging_port_refused_before_pairing_is_tried_again_after_it(monkeypat
         assert link._find_device() == ""
     link._pair("192.168.8.44", "37001", "123456")
     assert link._find_device() == "192.168.8.44:38959"
+
+
+def test_mdns_answer_sent_by_multicast_is_received(monkeypatch):
+    """In the car no mDNS answer ever arrived on the query's own port; a responder that
+    answers by multicast to 224.0.0.251:5353 must still be heard (listener on 5353)."""
+    import socket
+    import threading
+
+    answer = _mdns_srv_answer("adb-R5CX-abc._adb-tls-connect._tcp.local", 41769,
+                              "Android.local", "192.168.8.44")
+
+    def phone():
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            for _ in range(6):
+                time.sleep(0.3)
+                s.sendto(answer, ph.MDNS_ADDR)
+        except OSError:
+            pass
+        finally:
+            s.close()
+
+    def run():
+        threading.Thread(target=phone, daemon=True).start()
+        return ph.discover_adb_tls("", "", timeout=2.5)
+
+    found = run()
+    if not found:
+        import pytest
+        pytest.skip("no multicast on this machine")
+    assert found == [("192.168.8.44", 41769)]
+    monkeypatch.setattr(ph, "_mdns_listener", lambda *a: None)
+    assert run() == []                 # only the 5353 listener hears a multicast answer

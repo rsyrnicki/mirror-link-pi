@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- mDNS discovery also listens on port 5353: the phone's announcement of its debugging
+  (and pairing) port never arrived in any session, likely because Android answers by
+  multicast, which the query's own port doesn't receive. If it works, the Pi knows the
+  port within a second of the toggle (logged as `phone_mdns`); if not, the scan still
+  finds it.
 - `collect-logs.sh --pi --clear`: after copying, delete the sessions on the Pi (keeps
   the running one; numbering continues).
 - Settings the Pi doesn't know (or in the wrong section, e.g. `dpi` under `[usb]`) are

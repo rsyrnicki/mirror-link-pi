@@ -447,44 +447,89 @@ def scan_open_ports(ip: str, first: int, last: int, *, concurrency: int = 500,
     return sorted(found)
 
 
+def _mdns_listener(interface: str, local_ip: str) -> socket.socket | None:
+    """A socket on the standard mDNS port 5353, in the multicast group, next to the
+    Pi's avahi-daemon (UDP + SO_REUSEADDR lets both have the port). Answers that the
+    phone multicasts instead of sending back to the asking port arrive here."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    except OSError:
+        return None
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if interface:
+            sock.setsockopt(socket.SOL_SOCKET, 25, interface.encode())   # SO_BINDTODEVICE
+        sock.bind(("", MDNS_ADDR[1]))
+        group = socket.inet_aton(MDNS_ADDR[0]) + socket.inet_aton(local_ip or "0.0.0.0")
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, group)
+        if local_ip:
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
+                            socket.inet_aton(local_ip))
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
+        sock.setblocking(False)
+        return sock
+    except OSError as exc:
+        log.debug("mDNS listener on 5353 unavailable: %s", exc)
+        sock.close()
+        return None
+
+
 def discover_adb_tls(interface: str, local_ip: str, *, timeout: float = 2.0,
                      service: str = ADB_TLS_SERVICE) -> list[tuple[str, int]]:
     """Ask the Wi-Fi network for wireless-debugging endpoints: [(ip, port), ...].
-    ``service``: the connect service, or ADB_PAIRING_SERVICE for the pairing dialog."""
+    ``service``: the connect service, or ADB_PAIRING_SERVICE for the pairing dialog.
+
+    The query goes out twice: from a random port (answered by unicast, RFC 6762 6.7)
+    and from port 5353 (answered by multicast). In the car the first never got an
+    answer, so the second listens on 5353 too."""
     found: list[tuple[str, int]] = []
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    msock = _mdns_listener(interface, local_ip)
+    sel = selectors.DefaultSelector()
     try:
         if interface:
             sock.setsockopt(socket.SOL_SOCKET, 25, interface.encode())   # SO_BINDTODEVICE
         if local_ip:
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(local_ip))
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
-        sock.settimeout(0.5)
+        sock.setblocking(False)
+        sel.register(sock, selectors.EVENT_READ)
+        if msock is not None:
+            sel.register(msock, selectors.EVENT_READ)
         query = mdns_query(service)
         deadline = time.monotonic() + timeout
         next_send = 0.0
         while time.monotonic() < deadline:
             if time.monotonic() >= next_send:
-                sock.sendto(query, MDNS_ADDR)
+                for s in (sock, msock):
+                    if s is not None:
+                        try:
+                            s.sendto(query, MDNS_ADDR)
+                        except OSError as exc:
+                            log.debug("mDNS query failed: %s", exc)
                 next_send = time.monotonic() + 0.7
-            try:
-                data, (src, _) = sock.recvfrom(9000)
-            except TimeoutError:
-                continue
-            try:
-                answer = parse_mdns(data)
-            except (struct.error, IndexError):
-                continue
-            for instance, (target, port) in answer["srv"].items():
-                if not instance.rstrip(".").endswith(service):
-                    continue                  # e.g. the other adb service in the same answer
-                ip = answer["a"].get(target, src)
-                if (ip, port) not in found:
-                    found.append((ip, port))
+            for key, _ in sel.select(timeout=0.2):
+                try:
+                    data, (src, _) = key.fileobj.recvfrom(9000)
+                except OSError:
+                    continue
+                try:
+                    answer = parse_mdns(data)
+                except (struct.error, IndexError, ValueError):
+                    continue
+                for instance, (target, port) in answer["srv"].items():
+                    if not instance.rstrip(".").endswith(service):
+                        continue              # e.g. the other adb service in the same answer
+                    ip = answer["a"].get(target, src)
+                    if (ip, port) not in found:
+                        found.append((ip, port))
     except OSError as exc:
         log.debug("mDNS discovery failed: %s", exc)
     finally:
+        sel.close()
         sock.close()
+        if msock is not None:
+            msock.close()
     return found
 
 
@@ -1034,6 +1079,8 @@ class PhoneLink:
             self._set_status(f"looking for wireless debugging on {ip}")
             announced = [f"{h}:{p}" for h, p in discover_adb_tls(
                 self.cfg.interface, self.local_ip) if h == ip]
+            if announced:                     # so the logs show whether mDNS works
+                self._event("phone_mdns", announced=announced)
             found = self._try_targets(targets + announced)
             if found:
                 return found
