@@ -148,6 +148,39 @@ they act as Back and OK). On the pairing page the keyboard's digits fill in the 
 Every key the car sends is logged (`vnc_key`; unhandled ones also `phone_key_unmapped`)
 so more keys can be mapped.
 
+## The phone's hotspot instead of the Pi's (`wifi_mode = "client"`)
+
+By default the Pi runs its own Wi-Fi and the phone joins it. Samsung phones don't join
+a Wi-Fi without internet by themselves, so that costs a few taps every drive. The other
+way round, the **phone runs its hotspot and the Pi joins it**:
+
+- the phone keeps its own mobile internet (no "no internet" prompt, nothing to set);
+- the Pi joins by itself as soon as the hotspot is on (it tries every 5 s);
+- in the car: **Hotspot** tile + **Wireless debugging** tile, then wait.
+
+On the phone (Samsung): Settings → Connections → Mobile Hotspot and Tethering → Mobile
+Hotspot → ⚙: note the network name and password, set **Band: 2.4 GHz** (the Pi Zero 2 W
+has no 5 GHz) and security WPA2 (or WPA2/WPA3). Add the **Mobile Hotspot** tile to the
+quick settings panel.
+
+On the Pi (`mlpi.toml`, in the `[phone]` section):
+
+```toml
+wifi_mode = "client"
+phone_hotspot_ssid = "Robert's A56"        # the hotspot's name, exactly
+phone_hotspot_password = "…"               # its password
+```
+
+**Wireless debugging while the phone is a hotspot:** Android may refuse to switch it on
+without being connected to a Wi-Fi itself. If it does, use adb's fixed port instead,
+which needs no toggle at all: at home, with the phone connected over Wireless debugging
+(to the laptop or the Pi), run `adb tcpip 5555` once. The phone then accepts adb on port
+5555 on every network until it restarts, and the Pi tries that port first. Note that the
+port stays open on other networks too (only keys the phone trusts get in); switch it off
+with `adb usb` or by restarting the phone.
+
+Back to the Pi's own hotspot: `wifi_mode = "hotspot"` (or delete the line).
+
 ## The launcher
 
 Android puts only a special "secondary home" on scrcpy's virtual display — on Samsung
@@ -243,6 +276,7 @@ colour format the Pi has to convert in Python. Use `mlpi car-view` (desk test 2)
 | `bt_address` | `""` | the phone's Bluetooth address for `s6-audio-home-bt` (`""` = read it from the phone) |
 | `knob_invert` | `false` | the car's knob scrolls the other way inside apps (head units that send knob events; not the MIB2 Standard) |
 | `home_button` | `"right"` | where the Pi's Home button sits on the phone video: `right` / `left` (middle of that edge), `top-left`, `top-right`, `bottom-left`, `bottom-right`, or `off` |
+| `wifi_mode` | `"hotspot"` | `"client"`: the Pi joins the phone's hotspot (`phone_hotspot_ssid`, `phone_hotspot_password`) instead of running its own; see above |
 | `back_button` | `true` | a Back button above the Home button (head units like the MIB2 Standard send no Back key to MirrorLink) |
 | `system_decorations` | `false` | Samsung's secondary-display launcher + navigation bar on the virtual display |
 | `keep_active` | `true` | keeps the phone awake while mirroring |

@@ -442,3 +442,37 @@ def test_hanging_port_restarts_adb_but_the_real_port_still_connects(monkeypatch)
         results.append(link._find_device())
     assert results == ["", "", "192.168.8.44:42577"]
     assert ("kill-server",) in calls
+
+
+def test_client_mode_joins_the_phone_hotspot_and_parks_the_pi_hotspot():
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        out = "mlpi-hotspot\nlo\n" if cmd[:3] == ["nmcli", "-t", "-f"] else ""
+        return types.SimpleNamespace(returncode=0, stdout=out, stderr="")
+
+    result = ph.ensure_phone_hotspot_client("wlan0", "Galaxy A56", "secret-pass", "DE", run=run)
+    assert result.startswith("joining")
+    assert ["nmcli", "connection", "modify", "mlpi-hotspot",
+            "connection.autoconnect", "no"] in calls          # the Pi's own AP stays off
+    add = next(c for c in calls if c[:3] == ["nmcli", "connection", "add"])
+    assert ph.PHONE_HOTSPOT_CONNECTION in add and "Galaxy A56" in add
+    mod = next(c for c in calls if c[:4] == ["nmcli", "connection", "modify",
+                                             ph.PHONE_HOTSPOT_CONNECTION])
+    assert mod[mod.index("ipv4.method") + 1] == "auto"
+    assert mod[mod.index("802-11-wireless-security.psk") + 1] == "secret-pass"
+    assert not any(c[:3] == ["nmcli", "connection", "up"] for c in calls)   # phone may be off
+    assert "not configured" in ph.ensure_phone_hotspot_client("wlan0", "", "x", "DE", run=run)
+
+
+def test_wifi_gateway_is_the_phone(tmp_path):
+    route = tmp_path / "route"
+    route.write_text(
+        "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\n"
+        "usb0\t0007A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\n"
+        "wlan0\t00000000\t012BA8C0\t0003\t0\t0\t600\t00000000\n"     # via 192.168.43.1
+        "wlan0\t002BA8C0\t00000000\t0001\t0\t0\t600\t00FFFFFF\n")
+    assert ph.wifi_gateway("wlan0", str(route)) == "192.168.43.1"
+    assert ph.wifi_gateway("usb0", str(route)) == ""
+    assert ph.wifi_gateway("wlan0", str(tmp_path / "missing")) == ""

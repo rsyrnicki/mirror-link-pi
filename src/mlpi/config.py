@@ -137,6 +137,12 @@ class PhoneConfig:
     wifi_password: str = ""              # 8-63 characters; prepare-sd.sh --phone sets one
     wifi_country: str = "DE"
     wifi_channel: int = 6
+    # "hotspot": the Pi runs its own Wi-Fi (above) and the phone joins it.
+    # "client":  the phone runs its hotspot and the Pi joins that: the phone keeps its
+    #            own mobile internet, and only the phone's hotspot needs switching on.
+    wifi_mode: str = "hotspot"
+    phone_hotspot_ssid: str = ""         # client mode: the phone's hotspot name …
+    phone_hotspot_password: str = ""     # … and password (8-63 characters)
     # The phone's Bluetooth address for the s6-audio-home-bt variant ("" = read it from
     # the phone over adb and remember it on the card).
     bt_address: str = ""

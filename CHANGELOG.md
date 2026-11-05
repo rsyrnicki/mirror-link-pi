@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- New `wifi_mode = "client"`: the Pi joins the phone's hotspot instead of running its
+  own Wi-Fi. The phone keeps its mobile internet, and the Pi connects by itself as soon
+  as the hotspot is on (retrying every 5 s). See docs/phone-mode.md.
 - The Pi checks its power supply every second during the first minute after a start
   and writes any under-voltage alarm to the card at once. Several starts in the car
   ended ~22 s after power-on (when the Wi-Fi hotspot comes up) without a trace; this

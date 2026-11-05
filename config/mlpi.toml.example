@@ -40,6 +40,9 @@ ml_command = false
 # wifi_country = "DE"
 # apps = [{name = "Waze", package = "com.waze", colour = "#33ccff"}]   # launcher tiles (max 7)
 # start_app = ""                 # open this app directly instead of the Pi launcher
+# wifi_mode = "hotspot"          # "client": join the phone's hotspot instead (below)
+# phone_hotspot_ssid = ""        # client mode: the phone's hotspot name
+# phone_hotspot_password = ""    # client mode: its password
 # dpi = 120                      # 120 = apps use landscape layouts; bigger = larger UI
 # max_fps = 20
 # bit_rate = 3000000

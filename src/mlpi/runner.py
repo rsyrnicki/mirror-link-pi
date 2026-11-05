@@ -176,11 +176,58 @@ def _variant_manager(cfg: Config, variants_file: Path, session: Session) -> Vari
                               session=session)
 
 
+def _start_phone_client_mode(cfg: Config, phone_link, router: InputRouter,
+                             stop: threading.Event, session: Session) -> None:
+    """wifi_mode = "client": the Pi joins the phone's hotspot and finds the phone at
+    the gateway address it hands out. No DHCP server of our own on Wi-Fi."""
+    from .phone import ensure_phone_hotspot_client, join_phone_hotspot, wifi_gateway
+    pc = cfg.phone
+
+    def keep_joined() -> None:
+        result = ""
+        for _attempt in range(12):                  # NetworkManager may still be starting
+            result = ensure_phone_hotspot_client(pc.interface, pc.phone_hotspot_ssid,
+                                                 pc.phone_hotspot_password, pc.wifi_country)
+            log.info("phone: %s", result)
+            session.event("phone_hotspot", result=result, mode="client")
+            if result.startswith("joining") or "not configured" in result or stop.wait(10):
+                break
+        session.note("phone hotspot", result)
+        if not result.startswith("joining"):
+            return
+        joined = None
+        while not stop.is_set():
+            gateway = wifi_gateway(pc.interface)
+            if bool(gateway) != joined:
+                joined = bool(gateway)
+                session.event("phone_hotspot_joined" if joined else "phone_hotspot_lost",
+                              gateway=gateway)
+                log.info("phone hotspot %s", f"joined, phone at {gateway}" if joined
+                         else "not joined: waiting for the phone's hotspot")
+            if not joined:
+                join_phone_hotspot(pc.interface)     # scans now instead of in a minute
+            stop.wait(5.0)
+    threading.Thread(target=keep_joined, name="phone-hotspot", daemon=True).start()
+
+    def candidates() -> list[str]:
+        gateway = wifi_gateway(pc.interface)
+        return [gateway] if gateway else []
+    phone_link.candidates = candidates
+    phone_link.local_ip = ""                         # our address comes from the phone
+    router.attach_phone(phone_link.frame, phone_link)
+    guarded("phone", phone_link.run, stop, session)
+
+
 def _start_phone_mode(cfg: Config, phone_link, router: InputRouter, stop: threading.Event,
-                      session: Session) -> DhcpServer:
+                      session: Session) -> DhcpServer | None:
     """Hotspot + DHCP on the Wi-Fi interface + the scrcpy link (docs/phone-mode.md)."""
     from .phone import HotspotSettings, ensure_hotspot
     pc = cfg.phone
+    if pc.wifi_mode == "client":
+        _start_phone_client_mode(cfg, phone_link, router, stop, session)
+        return None
+    if pc.wifi_mode != "hotspot":
+        log.warning("unknown wifi_mode %r: using the Pi's own hotspot", pc.wifi_mode)
     server_ip, _, prefix = pc.address.partition("/")
     if pc.manage_hotspot:
         def hotspot() -> None:

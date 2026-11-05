@@ -670,6 +670,91 @@ def ensure_hotspot(s: HotspotSettings, *, run=subprocess.run) -> str:
     return f"hotspot {s.ssid!r} up on {s.interface}"
 
 
+# ---------- or: the Pi joins the phone's own hotspot (wifi_mode = "client") ----------
+
+PHONE_HOTSPOT_CONNECTION = "mlpi-phone-hotspot"
+
+
+def client_commands(interface: str, ssid: str, password: str,
+                    exists: bool) -> list[list[str]]:
+    """nmcli commands that create/update the connection to the phone's hotspot. The
+    connection isn't brought up here: the phone's hotspot may not be on yet."""
+    settings = [
+        "connection.interface-name", interface,
+        "connection.autoconnect", "yes",
+        "connection.autoconnect-priority", "100",
+        "connection.autoconnect-retries", "0",          # 0 = keep trying forever
+        "802-11-wireless.ssid", ssid,
+        "802-11-wireless.mode", "infrastructure",
+        "802-11-wireless.powersave", "2",              # off: see hotspot_commands
+        "802-11-wireless-security.key-mgmt", "wpa-psk",
+        "802-11-wireless-security.psk", password,
+        "ipv4.method", "auto",                          # the phone hands out addresses
+        "ipv6.method", "disabled",
+    ]
+    if exists:
+        return [["nmcli", "connection", "modify", PHONE_HOTSPOT_CONNECTION, *settings]]
+    return [["nmcli", "connection", "add", "type", "wifi", "con-name",
+             PHONE_HOTSPOT_CONNECTION, "ifname", interface, "ssid", ssid],
+            ["nmcli", "connection", "modify", PHONE_HOTSPOT_CONNECTION, *settings]]
+
+
+def ensure_phone_hotspot_client(interface: str, ssid: str, password: str, country: str,
+                                *, run=subprocess.run) -> str:
+    """Set up joining the phone's hotspot, and keep the Pi's own hotspot from coming
+    up (NetworkManager remembers it from hotspot mode). Returns a short status text."""
+    if not ssid or not 8 <= len(password) <= 63:
+        return "phone_hotspot_ssid / phone_hotspot_password (8-63 chars) not configured"
+    try:
+        if country:
+            run(["raspi-config", "nonint", "do_wifi_country", country],
+                capture_output=True, timeout=30)
+        names = run(["nmcli", "-t", "-f", "NAME", "connection", "show"],
+                    capture_output=True, text=True, timeout=15).stdout.split()
+        if HOTSPOT_CONNECTION in names:
+            for cmd in (["nmcli", "connection", "modify", HOTSPOT_CONNECTION,
+                         "connection.autoconnect", "no"],
+                        ["nmcli", "connection", "down", HOTSPOT_CONNECTION]):
+                run(cmd, capture_output=True, text=True, timeout=30)   # may already be down
+        for cmd in client_commands(interface, ssid, password,
+                                   PHONE_HOTSPOT_CONNECTION in names):
+            out = run(cmd, capture_output=True, text=True, timeout=30)
+            if out.returncode != 0:
+                return f"{' '.join(cmd[:3])} failed: {(out.stderr or out.stdout).strip()[:200]}"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"phone hotspot setup failed: {exc}"
+    try:
+        run(["iw", "dev", interface, "set", "power_save", "off"],
+            capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return f"joining the phone's hotspot {ssid!r} on {interface}"
+
+
+def wifi_gateway(interface: str, route_file: str = "/proc/net/route") -> str:
+    """The default gateway on ``interface`` (in client mode: the phone), '' if none."""
+    try:
+        lines = Path(route_file).read_text().splitlines()[1:]
+    except OSError:
+        return ""
+    for line in lines:
+        f = line.split()
+        if len(f) >= 3 and f[0] == interface and f[1] == "00000000" and f[2] != "00000000":
+            return socket.inet_ntoa(struct.pack("<I", int(f[2], 16)))
+    return ""
+
+
+def join_phone_hotspot(interface: str, *, run=subprocess.run) -> bool:
+    """One attempt to connect now (NetworkManager alone rescans only every minute or
+    two once nothing is found). True if the connection came up."""
+    try:
+        out = run(["nmcli", "--wait", "15", "connection", "up", PHONE_HOTSPOT_CONNECTION],
+                  capture_output=True, text=True, timeout=25)
+        return out.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 # ---------- the phone link ----------
 
 class PhoneDisconnected(Exception):
@@ -804,10 +889,13 @@ class PhoneLink:
         """Snapshot which network the phone uses for the internet (Wi-Fi to the Pi has
         none), 20 s after connecting: full dump to phone-connectivity.txt, the key
         lines as a phone_connectivity event."""
-        if getattr(self.cfg, "avoid_bad_wifi", True):
+        # The phone as hotspot (client mode) isn't on anyone's Wi-Fi: nothing to watch,
+        # and no reason to touch its settings.
+        phone_is_hotspot = getattr(self.cfg, "wifi_mode", "hotspot") == "client"
+        if getattr(self.cfg, "avoid_bad_wifi", True) and not phone_is_hotspot:
             self._avoid_bad_wifi(serial)
         self._learn_bt_address(serial)
-        if self._stop.wait(20):
+        if phone_is_hotspot or self._stop.wait(20):
             return
         dump = self.adb.run("shell", "dumpsys", "connectivity", serial=serial, timeout=30)
         always_on = self.adb.run("shell", "settings", "get", "global",
@@ -1069,7 +1157,9 @@ class PhoneLink:
                 return serial
         ips = self.candidates()
         if not ips:
-            self._set_status("waiting for the phone on Wi-Fi")
+            self._set_status("waiting for the phone's hotspot"
+                             if getattr(self.cfg, "wifi_mode", "") == "client"
+                             else "waiting for the phone on Wi-Fi")
             return ""
         for ip in ips:
             targets = [f"{ip}:{self.cfg.legacy_port}"] if self.cfg.legacy_port else []
@@ -1111,7 +1201,9 @@ class PhoneLink:
                 if found:
                     return found
         if self.status.startswith("looking"):
-            self._set_status("phone on Wi-Fi, but wireless debugging is off")
+            self._set_status("on the phone's hotspot, but wireless debugging is off"
+                             if getattr(self.cfg, "wifi_mode", "") == "client"
+                             else "phone on Wi-Fi, but wireless debugging is off")
         if ips and self._unreachable_since is None:
             self._unreachable_since = time.monotonic()
         if (ips and self.pairing and time.monotonic() - self._unreachable_since >= PAIR_PAGE_AFTER
