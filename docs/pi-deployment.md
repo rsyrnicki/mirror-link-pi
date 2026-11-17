@@ -206,7 +206,10 @@ update needs one, the update says so; then run `sudo ./scripts/prepare-sd.sh --p
 
 ```bash
 # from the laptop, Pi on its USB port (card made with --ssh / install-sd.sh):
-ssh -i ~/.config/mlpi/ssh/id_ed25519 mlpi@192.168.7.2
+ssh -o IdentitiesOnly=yes -i ~/.config/mlpi/ssh/id_ed25519 \
+    -o UserKnownHostsFile=~/.config/mlpi/ssh/known_hosts mlpi@192.168.7.2
+# ("Too many authentication failures": IdentitiesOnly was left out, so ssh tried the
+#  other keys it holds first. Shorter: the "Host mlpi" block below, then "ssh mlpi".)
 systemctl status mlpi.target 'mlpi*'
 cat /var/lib/mlpi/sessions/current/summary.txt
 journalctl -b -u mlpi-gadget -u mlpi
@@ -215,4 +218,16 @@ ls /sys/class/udc                 # empty → no gadget controller (see below)
 #   dtoverlay=dwc2,dr_mode=peripheral
 # A dwc2 line under [cm4]/[cm5]/[pi5] does NOT count on a Pi Zero 2 W.
 # prepare-sd.sh adds it; if you edited config.txt by hand, check the section.
+```
+
+To type less, add this to `~/.ssh/config` on the laptop; then `ssh mlpi` logs in and
+`ssh -t mlpi sudo nano /boot/firmware/mlpi.toml` edits the settings:
+
+```
+Host mlpi
+    HostName 192.168.7.2
+    User mlpi
+    IdentityFile ~/.config/mlpi/ssh/id_ed25519
+    IdentitiesOnly yes
+    UserKnownHostsFile ~/.config/mlpi/ssh/known_hosts
 ```
