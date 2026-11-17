@@ -156,7 +156,8 @@ way round, the **phone runs its hotspot and the Pi joins it**:
 
 - the phone keeps its own mobile internet (no "no internet" prompt, nothing to set);
 - the Pi joins by itself as soon as the hotspot is on (it tries every 5 s);
-- in the car: **Hotspot** tile + **Wireless debugging** tile, then wait.
+- in the car: the **Mobile Hotspot** tile, then wait (or no tap at all, see below).
+  Wireless debugging isn't used in this mode: see the next paragraphs.
 
 On the phone (Samsung): Settings → Connections → Mobile Hotspot and Tethering → Mobile
 Hotspot → ⚙: note the network name and password, set **Band: 2.4 GHz** (the Pi Zero 2 W
@@ -167,17 +168,30 @@ On the Pi (`mlpi.toml`, in the `[phone]` section):
 
 ```toml
 wifi_mode = "client"
-phone_hotspot_ssid = "Robert's A56"        # the hotspot's name, exactly
+phone_hotspot_ssid = "Galaxy A56"          # the hotspot's name, exactly
 phone_hotspot_password = "…"               # its password
 ```
 
-**Wireless debugging while the phone is a hotspot:** Android may refuse to switch it on
-without being connected to a Wi-Fi itself. If it does, use adb's fixed port instead,
-which needs no toggle at all: at home, with the phone connected over Wireless debugging
-(to the laptop or the Pi), run `adb tcpip 5555` once. The phone then accepts adb on port
-5555 on every network until it restarts, and the Pi tries that port first. Note that the
-port stays open on other networks too (only keys the phone trusts get in); switch it off
-with `adb usb` or by restarting the phone.
+**Wireless debugging can't be on while the phone is a hotspot:** Android switches it on
+only while the phone itself is connected to a Wi-Fi network (the Galaxy A56 refuses with
+the hotspot alone; if it is still on a Wi-Fi besides the hotspot, the switch works, which
+can look as if it worked before). So this mode uses adb's fixed port 5555 instead, which
+needs no switch at all. Set it up once after every restart of the phone:
+
+1. Phone: Developer options → **USB debugging** on.
+2. Phone to the laptop with a USB cable: `adb devices` (the first time, confirm *Allow USB
+   debugging?* on the phone), then `adb tcpip 5555`. Unplug.
+3. The first time the Pi connects on port 5555, the phone may ask *Allow USB debugging?*
+   for the Pi's key: tick *Always allow from this computer* and allow.
+
+The phone then accepts adb on port 5555 on every network until it restarts, and the Pi
+tries that port first. Note that the port stays open on other networks too, and that this
+adb connection isn't encrypted: only keys the phone trusts get in, but on a public Wi-Fi
+others can see the port. Switch it off with `adb usb` or by restarting the phone.
+
+**No tap at all:** a phone routine can turn the hotspot on when the car's Bluetooth
+connects, e.g. Samsung *Modes and Routines*: If *Bluetooth device connected* (the car) →
+Then *Mobile Hotspot* on (and off again when the car disconnects).
 
 Back to the Pi's own hotspot: `wifi_mode = "hotspot"` (or delete the line).
 
