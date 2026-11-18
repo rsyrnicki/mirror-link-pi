@@ -88,6 +88,9 @@ fi
 
 (( CLEAR == 0 )) || [[ -n "$PI" ]] || die "--clear works with --pi only"
 if [[ -n "$PI" ]]; then
+    # sudo would look for the key in root's home, not in the user's
+    [[ $EUID -ne 0 || -n "${MLPI_SSH_KEY:-}" ]] \
+        || die "--pi works without sudo: ./scripts/collect-logs.sh --pi$( ((CLEAR)) && echo " --clear")"
     [[ "$PI" == *@* ]] || PI="$PI@192.168.7.2"
     KEY="${MLPI_SSH_KEY:-$HOME/.config/mlpi/ssh/id_ed25519}"
     [[ -f "$KEY" ]] || die "no SSH key at $KEY: the card needs prepare-sd.sh --ssh (install-sd.sh does it)"
