@@ -80,6 +80,9 @@ TARGET="${TARGET:-mlpi}"
 [[ "$TARGET" == *@* ]] || TARGET="$TARGET@192.168.7.2"
 
 KEY="${MLPI_SSH_KEY:-$HOME/.config/mlpi/ssh/id_ed25519}"
+# sudo would look for the key in root's home, not in the user's
+[[ $EUID -ne 0 || -n "${MLPI_SSH_KEY:-}" ]] \
+    || { echo "ERROR: run it without sudo: ./scripts/update-pi.sh (sudo only with --card)" >&2; exit 1; }
 [[ -f "$KEY" ]] || { echo "ERROR: no update key at $KEY — prepare the card once with --ssh" >&2; exit 1; }
 # A re-flashed card gets new host keys; this file only ever holds the Pi's.
 KNOWN="$HOME/.config/mlpi/ssh/known_hosts"
